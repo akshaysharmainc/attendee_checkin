@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Attendee Check-In</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div id="app">
+        <header class="header">
+            <div class="container">
+                <h1><i class="fas fa-users"></i> Attendee Check-In</h1>
+                <div class="header-controls">
+                    <button id="syncButton" class="sync-button" title="Sync attendance data from Google Sheet">
+                        <i class="fas fa-sync-alt"></i>
+                        <span>Sync Sheet</span>
+                    </button>
+                    <div class="header-stats">
+                        <div class="stat">
+                            <span class="stat-label">Checked In</span>
+                            <span class="stat-value" id="checkedInCount">0</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <main class="main">
+            <div class="container">
+                <div class="search-section">
+                    <div class="search-container">
+                        <i class="fas fa-search search-icon"></i>
+                        <input 
+                            type="text" 
+                            id="searchInput" 
+                            class="search-input" 
+                            placeholder="Search by name or company..."
+                            autocomplete="off"
+                        >
+                        <div class="search-loading" id="searchLoading" style="display: none;">
+                            <i class="fas fa-spinner fa-spin"></i>
+                        </div>
+                    </div>
+                    <div class="search-tips">
+                        <small>Type the first few letters of a name or company to see results</small>
+                    </div>
+                </div>
+
+                <div class="results-section">
+                    <div id="searchResults" class="search-results">
+                        <div class="empty-state">
+                            <i class="fas fa-search"></i>
+                            <p>Start typing to search for attendees</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="attendance-summary" id="attendanceSummary" style="display: none;">
+                    <h3>Attendance Summary</h3>
+                    <div class="summary-grid">
+                        <div class="summary-card">
+                            <div class="summary-number" id="totalAttendees">0</div>
+                            <div class="summary-label">Total Attendees</div>
+                        </div>
+                        <div class="summary-card">
+                            <div class="summary-number" id="totalCheckedIn">0</div>
+                            <div class="summary-label">Checked In</div>
+                        </div>
+                        <div class="summary-card">
+                            <div class="summary-number" id="checkInRate">0%</div>
+                            <div class="summary-label">Check-in Rate</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="bundle.js"></script>
+</body>
+</html> 

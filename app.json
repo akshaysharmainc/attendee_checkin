@@ -1,0 +1,38 @@
+{
+  "name": "attendee-checkin",
+  "description": "Corporate event attendee check-in app with Google Sheets integration",
+  "repository": "https://github.com/yourusername/attendee-checkin",
+  "logo": "https://cdn-icons-png.flaticon.com/512/3135/3135715.png",
+  "keywords": ["node", "express", "google-sheets", "attendee", "checkin"],
+  "env": {
+    "GOOGLE_SHEET_ID": {
+      "description": "Your Google Sheet ID (from the URL)",
+      "required": true
+    },
+    "GOOGLE_APPLICATION_CREDENTIALS": {
+      "description": "Google service account credentials (JSON content)",
+      "required": true
+    },
+    "GOOGLE_SHEET_RANGE": {
+      "description": "Sheet range (e.g., Sheet1!A:Z)",
+      "value": "Sheet1!A:Z",
+      "required": false
+    },
+    "NODE_ENV": {
+      "description": "Environment (production/development)",
+      "value": "production",
+      "required": false
+    }
+  },
+  "buildpacks": [
+    {
+      "url": "heroku/nodejs"
+    }
+  ],
+  "formation": {
+    "web": {
+      "quantity": 1,
+      "size": "basic"
+    }
+  }
+} 
