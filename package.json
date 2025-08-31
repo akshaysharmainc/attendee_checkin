@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
+    "prebuild": "node prebuild.js",
     "build": "webpack --mode production",
     "dev-build": "webpack --mode development --watch",
     "postinstall": "npm run build"
