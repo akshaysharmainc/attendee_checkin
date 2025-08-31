@@ -8,8 +8,7 @@
     "dev": "nodemon server.js",
     "prebuild": "node prebuild.js",
     "build": "webpack --mode production",
-    "dev-build": "webpack --mode development --watch",
-    "postinstall": "npm run build"
+    "dev-build": "webpack --mode development --watch"
   },
   "dependencies": {
     "express": "^4.18.2",

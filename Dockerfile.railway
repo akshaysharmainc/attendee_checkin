@@ -7,14 +7,14 @@ WORKDIR /app
 # Copy package files first for better caching
 COPY package*.json ./
 
-# Install ALL dependencies (including dev dependencies needed for build)
-RUN npm install
-
-# Copy ALL source code
+# Copy ALL source code BEFORE installing dependencies
 COPY . .
 
 # Verify source files exist
 RUN ls -la && echo "--- src contents ---" && ls -la src/
+
+# Install ALL dependencies (including dev dependencies needed for build)
+RUN npm install
 
 # Build the frontend assets
 RUN npm run build
