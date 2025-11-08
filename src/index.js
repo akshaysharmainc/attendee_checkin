@@ -91,11 +91,21 @@ class AttendeeCheckInApp {
     }
 
     createAttendeeRow(attendee) {
-        const checkInTime = attendee.checkInTime ? new Date(attendee.checkInTime).toLocaleTimeString() : '';
-        
-        // Get all attendee details (excluding internal fields)
-        const detailFields = Object.keys(attendee).filter(key => 
+        // Find color and spoc fields to exclude from details section
+        const colorField = Object.keys(attendee).find(key => 
+            (key.toLowerCase().includes('color') || key.toLowerCase().includes('colour')) &&
             !['id', 'checkedIn', 'checkInTime'].includes(key)
+        );
+        const spocField = Object.keys(attendee).find(key => 
+            (key.toLowerCase().includes('spoc') || key.toLowerCase().includes('host')) &&
+            !['id', 'checkedIn', 'checkInTime'].includes(key)
+        );
+        
+        // Get all attendee details (excluding internal fields and top section fields)
+        const detailFields = Object.keys(attendee).filter(key => 
+            !['id', 'checkedIn', 'checkInTime'].includes(key) &&
+            key !== colorField &&
+            key !== spocField
         );
 
         const detailsHTML = detailFields.map(field => {
@@ -130,7 +140,8 @@ class AttendeeCheckInApp {
                         <div class="attendee-company">
                             ${this.getDisplayCompany(attendee)}
                         </div>
-                        ${checkInTime ? `<div class="checkin-time">Checked in at ${checkInTime}</div>` : ''}
+                        ${this.getDisplayColor(attendee) ? `<div class="attendee-color">${this.getDisplayColor(attendee)}</div>` : ''}
+                        ${this.getDisplaySpoc(attendee) ? `<div class="attendee-spoc">${this.getDisplaySpoc(attendee)}</div>` : ''}
                     </div>
                 </div>
                 <div class="attendee-details">
@@ -146,6 +157,20 @@ class AttendeeCheckInApp {
 
     getDisplayCompany(attendee) {
         return attendee.company || attendee.organization || attendee.employer || 'Company not provided';
+    }
+
+    getDisplayColor(attendee) {
+        const colorField = Object.keys(attendee).find(key => 
+            key.toLowerCase().includes('color') || key.toLowerCase().includes('colour')
+        );
+        return colorField ? attendee[colorField] : null;
+    }
+
+    getDisplaySpoc(attendee) {
+        const spocField = Object.keys(attendee).find(key => 
+            key.toLowerCase().includes('spoc') || key.toLowerCase().includes('host')
+        );
+        return spocField ? attendee[spocField] : null;
     }
 
     formatFieldName(field) {

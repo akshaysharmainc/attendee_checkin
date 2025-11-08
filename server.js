@@ -205,7 +205,7 @@ async function updateSheetCheckInStatus(rowIndex, checkedIn, checkInTime) {
             range: statusRange,
             valueInputOption: 'RAW',
             resource: {
-                values: [[checkedIn ? 'Checked In' : 'Not Checked In']]
+                values: [[checkedIn === true]]
             }
         });
 
@@ -402,7 +402,19 @@ app.post('/api/attendance/sync-from-sheet', async (req, res) => {
                 const status = row[checkInStatusCol];
                 const time = checkInTimeCol !== -1 ? row[checkInTimeCol] : null;
                 
-                if (status && (status.toLowerCase().includes('checked') || status.toLowerCase().includes('yes'))) {
+                // Accept 'checked', 'yes', boolean true, string 'true' (case-insensitive), and 1 as checked-in
+                if (
+                    status &&
+                    (
+                        (typeof status === 'string' && (
+                            status.toLowerCase().includes('checked') ||
+                            status.toLowerCase().includes('yes') ||
+                            status.toLowerCase() === 'true'
+                        )) ||
+                        status === true ||
+                        status === 1
+                    )
+                ) {
                     attendanceData.set(index + 1, time || new Date().toISOString());
                 }
             });

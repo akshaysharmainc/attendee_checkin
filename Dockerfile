@@ -1,13 +1,12 @@
 FROM node:18-alpine
 
-# Set working directory
 WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci --only=production
+# Install all dependencies (including dev dependencies for build)
+RUN npm install
 
 # Copy source code
 COPY . .
@@ -15,8 +14,9 @@ COPY . .
 # Build frontend assets
 RUN npm run build
 
-# Expose port
+# Remove dev dependencies to reduce image size
+RUN npm prune --production
+
 EXPOSE 3000
 
-# Start the application
 CMD ["npm", "start"] 
