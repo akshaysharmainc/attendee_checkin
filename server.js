@@ -14,8 +14,9 @@ app.use(express.static('public'));
 
 // Google Sheets configuration
 const SCOPES = ['https://www.googleapis.com/auth/spreadsheets']; // Updated to include write access
-const SHEET_ID = process.env.GOOGLE_SHEET_ID;
-const RANGE = process.env.GOOGLE_SHEET_RANGE || 'Sheet1!A:Z'; // Adjust based on your sheet structure
+// Legacy: Support environment variables for backward compatibility
+const DEFAULT_SHEET_ID = process.env.GOOGLE_SHEET_ID;
+const DEFAULT_RANGE = process.env.GOOGLE_SHEET_RANGE || 'Sheet1!A:Z';
 
 // Demo data for testing when Google Sheets is not configured
 const DEMO_ATTENDEES = [
@@ -178,7 +179,37 @@ let sheets = null;
 let authError = null;
 let isConfigured = false;
 
-if (SHEET_ID && credentials && !credentialsError) {
+// Helper function to validate sheet access
+async function validateSheetAccess(sheetId, range = DEFAULT_RANGE) {
+    if (!auth || !sheets || !sheetId) {
+        return { valid: false, error: 'Google Sheets not configured or sheet ID not provided' };
+    }
+    
+    try {
+        const authClient = await auth.getClient();
+        await retryOperation(async () => {
+            return await sheets.spreadsheets.values.get({
+                auth: authClient,
+                spreadsheetId: sheetId,
+                range: range,
+            });
+        });
+        return { valid: true };
+    } catch (error) {
+        if (error.code === 403 || error.code === 404) {
+            return { 
+                valid: false, 
+                error: `Cannot access sheet. Ensure the sheet is shared with the service account email and the sheet ID is correct.` 
+            };
+        }
+        return { 
+            valid: false, 
+            error: `Error accessing sheet: ${error.message}` 
+        };
+    }
+}
+
+if (DEFAULT_SHEET_ID && credentials && !credentialsError) {
     try {
         if (typeof credentials === 'string') {
             // File path
@@ -196,8 +227,12 @@ if (SHEET_ID && credentials && !credentialsError) {
         sheets = google.sheets({ version: 'v4' });
         isConfigured = true;
         console.log('✅ Google Sheets integration enabled with write access');
-        console.log(`   Sheet ID: ${SHEET_ID}`);
-        console.log(`   Range: ${RANGE}`);
+        if (DEFAULT_SHEET_ID) {
+            console.log(`   Default Sheet ID: ${DEFAULT_SHEET_ID}`);
+            console.log(`   Default Range: ${DEFAULT_RANGE}`);
+        } else {
+            console.log('   Sheet ID will be provided by frontend');
+        }
     } catch (error) {
         authError = `Failed to initialize Google Auth: ${error.message}`;
         console.error(`❌ ${authError}`);
@@ -205,12 +240,16 @@ if (SHEET_ID && credentials && !credentialsError) {
     }
 } else {
     const reasons = [];
-    if (!SHEET_ID) reasons.push('GOOGLE_SHEET_ID not set');
     if (!credentials || credentialsError) {
         reasons.push(credentialsError || 'GOOGLE_APPLICATION_CREDENTIALS not configured');
     }
-    console.log(`⚠️  Google Sheets not configured: ${reasons.join(', ')}`);
-    console.log('📱 Running in demo mode with sample data');
+    if (reasons.length > 0) {
+        console.log(`⚠️  Google Sheets credentials not configured: ${reasons.join(', ')}`);
+        console.log('📱 Running in demo mode with sample data');
+    } else {
+        console.log('✅ Google Sheets credentials configured');
+        console.log('   Sheet ID will be provided by frontend');
+    }
 }
 
 // Store attendance data in memory (in production, use a database)
@@ -233,12 +272,12 @@ async function retryOperation(operation, maxRetries = 3, delay = 1000) {
 }
 
 // Function to ensure check-in columns exist (idempotent)
-async function ensureCheckInColumns(authClient) {
+async function ensureCheckInColumns(authClient, sheetId, range) {
     try {
         const response = await sheets.spreadsheets.values.get({
             auth: authClient,
-            spreadsheetId: SHEET_ID,
-            range: RANGE,
+            spreadsheetId: sheetId,
+            range: range,
         });
 
         const rows = response.data.values;
@@ -261,12 +300,13 @@ async function ensureCheckInColumns(authClient) {
 
         // Create columns if they don't exist (idempotent - check again after potential creation)
         if (checkInStatusCol === -1) {
-            const newRange = `${RANGE.split('!')[0]}!${String.fromCharCode(65 + headers.length)}1`;
+            const sheetName = range.split('!')[0];
+            const newRange = `${sheetName}!${String.fromCharCode(65 + headers.length)}1`;
             try {
                 await retryOperation(async () => {
                     await sheets.spreadsheets.values.update({
                         auth: authClient,
-                        spreadsheetId: SHEET_ID,
+                        spreadsheetId: sheetId,
                         range: newRange,
                         valueInputOption: 'RAW',
                         resource: {
@@ -277,8 +317,8 @@ async function ensureCheckInColumns(authClient) {
                 // Re-fetch to get updated headers
                 const updatedResponse = await sheets.spreadsheets.values.get({
                     auth: authClient,
-                    spreadsheetId: SHEET_ID,
-                    range: RANGE,
+                    spreadsheetId: sheetId,
+                    range: range,
                 });
                 const updatedHeaders = updatedResponse.data.values[0];
                 checkInStatusCol = updatedHeaders.findIndex(h => 
@@ -303,12 +343,13 @@ async function ensureCheckInColumns(authClient) {
         }
 
         if (checkInTimeCol === -1) {
-            const newRange = `${RANGE.split('!')[0]}!${String.fromCharCode(65 + (checkInStatusCol !== -1 ? checkInStatusCol + 1 : headers.length))}1`;
+            const sheetName = range.split('!')[0];
+            const newRange = `${sheetName}!${String.fromCharCode(65 + (checkInStatusCol !== -1 ? checkInStatusCol + 1 : headers.length))}1`;
             try {
                 await retryOperation(async () => {
                     await sheets.spreadsheets.values.update({
                         auth: authClient,
-                        spreadsheetId: SHEET_ID,
+                        spreadsheetId: sheetId,
                         range: newRange,
                         valueInputOption: 'RAW',
                         resource: {
@@ -319,8 +360,8 @@ async function ensureCheckInColumns(authClient) {
                 // Re-fetch to get updated headers
                 const updatedResponse = await sheets.spreadsheets.values.get({
                     auth: authClient,
-                    spreadsheetId: SHEET_ID,
-                    range: RANGE,
+                    spreadsheetId: sheetId,
+                    range: range,
                 });
                 const updatedHeaders = updatedResponse.data.values[0];
                 checkInTimeCol = updatedHeaders.findIndex(h => 
@@ -331,8 +372,8 @@ async function ensureCheckInColumns(authClient) {
                 // Column might have been created by another request - try to find it
                 const updatedResponse = await sheets.spreadsheets.values.get({
                     auth: authClient,
-                    spreadsheetId: SHEET_ID,
-                    range: RANGE,
+                    spreadsheetId: sheetId,
+                    range: range,
                 });
                 const updatedHeaders = updatedResponse.data.values[0];
                 checkInTimeCol = updatedHeaders.findIndex(h => 
@@ -350,17 +391,21 @@ async function ensureCheckInColumns(authClient) {
 }
 
 // Function to update Google Sheet with check-in status
-async function updateSheetCheckInStatus(rowIndex, checkedIn, checkInTime) {
+async function updateSheetCheckInStatus(rowIndex, checkedIn, checkInTime, sheetId, range) {
     if (!sheets || !auth) {
         console.log('Google Sheets not available, skipping sheet update');
         return { success: false, error: 'Google Sheets not configured' };
+    }
+
+    if (!sheetId) {
+        return { success: false, error: 'Sheet ID is required' };
     }
 
     try {
         const authClient = await auth.getClient();
         
         // Ensure check-in columns exist (idempotent)
-        const { checkInStatusCol, checkInTimeCol } = await ensureCheckInColumns(authClient);
+        const { checkInStatusCol, checkInTimeCol } = await ensureCheckInColumns(authClient, sheetId, range);
         
         if (checkInStatusCol === -1) {
             throw new Error('Could not find or create check-in status column');
@@ -370,8 +415,8 @@ async function updateSheetCheckInStatus(rowIndex, checkedIn, checkInTime) {
         const response = await retryOperation(async () => {
             return await sheets.spreadsheets.values.get({
                 auth: authClient,
-                spreadsheetId: SHEET_ID,
-                range: RANGE,
+                spreadsheetId: sheetId,
+                range: range,
             });
         });
 
@@ -385,16 +430,17 @@ async function updateSheetCheckInStatus(rowIndex, checkedIn, checkInTime) {
         }
 
         // Update the specific row with check-in status and time
-        const statusRange = `${RANGE.split('!')[0]}!${String.fromCharCode(65 + checkInStatusCol)}${rowIndex + 1}`;
+        const sheetName = range.split('!')[0];
+        const statusRange = `${sheetName}!${String.fromCharCode(65 + checkInStatusCol)}${rowIndex + 1}`;
         const timeRange = checkInTimeCol !== -1 
-            ? `${RANGE.split('!')[0]}!${String.fromCharCode(65 + checkInTimeCol)}${rowIndex + 1}`
+            ? `${sheetName}!${String.fromCharCode(65 + checkInTimeCol)}${rowIndex + 1}`
             : null;
 
         // Update check-in status with retry (using boolean value)
         await retryOperation(async () => {
             await sheets.spreadsheets.values.update({
                 auth: authClient,
-                spreadsheetId: SHEET_ID,
+                spreadsheetId: sheetId,
                 range: statusRange,
                 valueInputOption: 'RAW',
                 resource: {
@@ -408,7 +454,7 @@ async function updateSheetCheckInStatus(rowIndex, checkedIn, checkInTime) {
             await retryOperation(async () => {
                 await sheets.spreadsheets.values.update({
                     auth: authClient,
-                    spreadsheetId: SHEET_ID,
+                    spreadsheetId: sheetId,
                     range: timeRange,
                     valueInputOption: 'RAW',
                     resource: {
@@ -428,16 +474,20 @@ async function updateSheetCheckInStatus(rowIndex, checkedIn, checkInTime) {
 }
 
 // Helper function to get attendees (either from Google Sheets or demo data)
-async function getAttendees() {
-    if (auth && SHEET_ID) {
+async function getAttendees(sheetId, range) {
+    // Use provided sheetId/range, or fall back to defaults for backward compatibility
+    const targetSheetId = sheetId || DEFAULT_SHEET_ID;
+    const targetRange = range || DEFAULT_RANGE;
+    
+    if (auth && targetSheetId) {
         try {
             const authClient = await auth.getClient();
             
             const response = await retryOperation(async () => {
                 return await sheets.spreadsheets.values.get({
                     auth: authClient,
-                    spreadsheetId: SHEET_ID,
-                    range: RANGE,
+                    spreadsheetId: targetSheetId,
+                    range: targetRange,
                 });
             });
 
@@ -520,39 +570,38 @@ async function getAttendees() {
 }
 
 // Health check endpoint to verify Google Sheets configuration
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
+    const { sheetId } = req.query;
+    
     const health = {
         status: 'ok',
-        googleSheetsConfigured: isConfigured,
-        demoMode: !isConfigured,
+        credentialsConfigured: isConfigured,
         timestamp: new Date().toISOString(),
         configuration: {
-            sheetId: SHEET_ID ? 'configured' : 'not set',
-            range: RANGE,
-            credentials: credentials ? 'configured' : 'not set'
+            credentials: credentials ? 'configured' : 'not set',
+            defaultSheetId: DEFAULT_SHEET_ID ? 'configured' : 'not set',
+            mode: isConfigured ? 'frontend-provided-sheet' : 'demo'
         }
     };
     
     if (isConfigured) {
-        health.message = 'Google Sheets integration active';
+        health.message = 'Google Sheets credentials configured';
         health.details = {
-            sheetId: SHEET_ID,
-            range: RANGE
+            note: 'Sheet ID should be provided by frontend (URL parameter or localStorage)',
+            defaultSheetId: DEFAULT_SHEET_ID || 'none'
         };
+        
+        // If sheetId provided, validate access
+        if (sheetId) {
+            const validation = await validateSheetAccess(sheetId);
+            health.sheetValidation = validation;
+        }
     } else {
         health.message = 'Running in demo mode';
         health.details = {
             reason: 'Google Sheets not configured',
             errors: []
         };
-        
-        if (!SHEET_ID) {
-            health.details.errors.push({
-                field: 'GOOGLE_SHEET_ID',
-                issue: 'Not set or invalid',
-                fix: 'Set GOOGLE_SHEET_ID environment variable with your Google Sheet ID'
-            });
-        }
         
         if (credentialsError) {
             health.details.errors.push({
@@ -579,34 +628,80 @@ app.get('/api/health', (req, res) => {
         health.details.setupInstructions = [
             '1. Create a Google Cloud project and enable Sheets API',
             '2. Create a service account and download JSON key',
-            '3. Share your Google Sheet with the service account email',
-            '4. Set GOOGLE_SHEET_ID and GOOGLE_APPLICATION_CREDENTIALS environment variables',
-            '5. Restart the server'
+            '3. Set GOOGLE_APPLICATION_CREDENTIALS environment variable',
+            '4. Share your Google Sheet with the service account email',
+            '5. Provide Sheet ID from frontend (URL parameter or input)',
+            '6. Restart the server'
         ];
     }
     
     res.json(health);
 });
 
+// Endpoint to validate sheet access
+app.get('/api/sheets/validate', async (req, res) => {
+    const { sheetId, range } = req.query;
+    
+    if (!sheetId) {
+        return res.status(400).json({ 
+            error: 'sheetId is required',
+            valid: false 
+        });
+    }
+    
+    const targetRange = range || DEFAULT_RANGE;
+    const validation = await validateSheetAccess(sheetId, targetRange);
+    
+    if (validation.valid) {
+        res.json({ 
+            valid: true, 
+            message: 'Sheet access validated successfully',
+            sheetId: sheetId,
+            range: targetRange
+        });
+    } else {
+        res.status(400).json({ 
+            valid: false, 
+            error: validation.error,
+            sheetId: sheetId,
+            range: targetRange
+        });
+    }
+});
+
 app.get('/api/attendees', async (req, res) => {
     try {
-        const attendees = await getAttendees();
+        const { sheetId, range } = req.query;
+        
+        if (!sheetId && !DEFAULT_SHEET_ID) {
+            return res.status(400).json({ 
+                error: 'Sheet ID is required. Provide sheetId as query parameter or set GOOGLE_SHEET_ID environment variable.' 
+            });
+        }
+        
+        const attendees = await getAttendees(sheetId, range);
         res.json(attendees);
     } catch (error) {
         console.error('Error fetching attendees:', error);
-        res.status(500).json({ error: 'Failed to fetch attendees' });
+        res.status(500).json({ error: 'Failed to fetch attendees: ' + error.message });
     }
 });
 
 // Search attendees
 app.get('/api/attendees/search', async (req, res) => {
     try {
-        const { query } = req.query;
+        const { query, sheetId, range } = req.query;
         if (!query || query.trim().length === 0) {
             return res.json([]);
         }
 
-        const attendees = await getAttendees();
+        if (!sheetId && !DEFAULT_SHEET_ID) {
+            return res.status(400).json({ 
+                error: 'Sheet ID is required. Provide sheetId as query parameter or set GOOGLE_SHEET_ID environment variable.' 
+            });
+        }
+
+        const attendees = await getAttendees(sheetId, range);
         const queryLower = query.toLowerCase();
         
         const results = attendees
@@ -630,8 +725,18 @@ app.get('/api/attendees/search', async (req, res) => {
 // Check in/out attendee
 app.post('/api/attendees/:id/checkin', async (req, res) => {
     const { id } = req.params;
-    const { checkedIn } = req.body;
+    const { checkedIn, sheetId, range } = req.body;
     const attendeeId = parseInt(id);
+    
+    const targetSheetId = sheetId || DEFAULT_SHEET_ID;
+    const targetRange = range || DEFAULT_RANGE;
+    
+    if (!targetSheetId) {
+        return res.status(400).json({ 
+            success: false,
+            error: 'Sheet ID is required. Provide sheetId in request body or set GOOGLE_SHEET_ID environment variable.' 
+        });
+    }
     
     // Validate input
     if (isNaN(attendeeId) || attendeeId < 1) {
@@ -652,7 +757,7 @@ app.post('/api/attendees/:id/checkin', async (req, res) => {
         const checkInTime = checkedIn ? new Date().toISOString() : null;
         
         // Update Google Sheet first (source of truth)
-        const sheetUpdate = await updateSheetCheckInStatus(attendeeId, checkedIn, checkInTime);
+        const sheetUpdate = await updateSheetCheckInStatus(attendeeId, checkedIn, checkInTime, targetSheetId, targetRange);
         
         if (!sheetUpdate.success) {
             // If sheet update fails, still update local cache but warn user
@@ -696,9 +801,12 @@ app.post('/api/attendees/:id/checkin', async (req, res) => {
 // Get attendance summary
 app.get('/api/attendance/summary', async (req, res) => {
     try {
+        const { sheetId, range } = req.query;
+        const targetSheetId = sheetId || DEFAULT_SHEET_ID;
+        
         // Read from Google Sheets (source of truth) if available
-        if (auth && SHEET_ID) {
-            const attendees = await getAttendees();
+        if (auth && targetSheetId) {
+            const attendees = await getAttendees(targetSheetId, range);
             const checkedInAttendees = attendees.filter(a => a.checkedIn);
             
             return res.json({
@@ -740,16 +848,27 @@ app.get('/api/attendance/summary', async (req, res) => {
 // New endpoint to sync attendance data from sheet on startup
 app.post('/api/attendance/sync-from-sheet', async (req, res) => {
     try {
-        if (!auth || !SHEET_ID) {
+        const { sheetId, range } = req.body;
+        const targetSheetId = sheetId || DEFAULT_SHEET_ID;
+        const targetRange = range || DEFAULT_RANGE;
+        
+        if (!auth) {
             return res.status(400).json({ 
                 error: 'Google Sheets not configured',
                 message: 'Cannot sync: Google Sheets integration is not set up',
                 details: {
-                    sheetIdConfigured: !!SHEET_ID,
                     credentialsConfigured: !!credentials && !credentialsError,
                     authInitialized: !!auth
                 },
-                fix: 'Please configure GOOGLE_SHEET_ID and GOOGLE_APPLICATION_CREDENTIALS. Check /api/health for details.'
+                fix: 'Please configure GOOGLE_APPLICATION_CREDENTIALS. Check /api/health for details.'
+            });
+        }
+        
+        if (!targetSheetId) {
+            return res.status(400).json({ 
+                error: 'Sheet ID is required',
+                message: 'Cannot sync: Sheet ID not provided',
+                fix: 'Provide sheetId in request body or set GOOGLE_SHEET_ID environment variable.'
             });
         }
 
@@ -757,8 +876,8 @@ app.post('/api/attendance/sync-from-sheet', async (req, res) => {
         const response = await retryOperation(async () => {
             return await sheets.spreadsheets.values.get({
                 auth: authClient,
-                spreadsheetId: SHEET_ID,
-                range: RANGE,
+                spreadsheetId: targetSheetId,
+                range: targetRange,
             });
         });
 
@@ -829,16 +948,20 @@ app.listen(PORT, () => {
     
     if (isConfigured) {
         console.log('✅ Google Sheets Integration: ACTIVE');
-        console.log(`   Sheet ID: ${SHEET_ID}`);
-        console.log(`   Range: ${RANGE}`);
+        if (DEFAULT_SHEET_ID) {
+            console.log(`   Default Sheet ID: ${DEFAULT_SHEET_ID}`);
+            console.log(`   Default Range: ${DEFAULT_RANGE}`);
+        } else {
+            console.log('   Sheet ID: Provided by frontend (URL parameter or localStorage)');
+        }
         console.log('   Write access: Enabled');
         console.log('   📝 Check-in status will be saved to Google Sheets');
     } else {
         console.log('📱 Google Sheets Integration: DEMO MODE');
         console.log('   Using sample data for testing');
         console.log('\n   To enable Google Sheets:');
-        console.log('   1. Set GOOGLE_SHEET_ID environment variable');
-        console.log('   2. Set GOOGLE_APPLICATION_CREDENTIALS (file path or JSON)');
+        console.log('   1. Set GOOGLE_APPLICATION_CREDENTIALS (file path or JSON)');
+        console.log('   2. Provide Sheet ID from frontend (URL parameter or input)');
         console.log('   3. Restart the server');
         console.log('\n   Check /api/health for detailed configuration status');
     }

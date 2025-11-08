@@ -22,6 +22,9 @@
                             <span class="stat-label">Checked In</span>
                             <span class="stat-value" id="checkedInCount">0</span>
                         </div>
+                        <button id="configGearBtn" class="config-gear-btn" title="Configure Google Sheet">
+                            <i class="fas fa-cog"></i>
+                        </button>
                     </div>
                 </div>
             </div>
@@ -29,6 +32,47 @@
 
         <main class="main">
             <div class="container">
+                <!-- Sheet Configuration Modal -->
+                <div id="sheetConfigModal" class="sheet-config-modal" style="display: none;">
+                    <div class="sheet-config-content">
+                        <h2><i class="fas fa-cog"></i> Configure Google Sheet</h2>
+                        <p class="config-description">Enter your Google Sheet ID to connect to your attendee data.</p>
+                        <form id="sheetConfigForm">
+                            <div class="form-group">
+                                <label for="sheetIdInput">Sheet ID <span class="required">*</span></label>
+                                <input 
+                                    type="text" 
+                                    id="sheetIdInput" 
+                                    class="form-input" 
+                                    placeholder="e.g., 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms"
+                                    required
+                                >
+                                <small class="form-help">Find this in your Google Sheet URL: <code>docs.google.com/spreadsheets/d/[SHEET_ID]/edit</code></small>
+                            </div>
+                            <div class="form-group">
+                                <label for="rangeInput">Sheet Range (optional)</label>
+                                <input 
+                                    type="text" 
+                                    id="rangeInput" 
+                                    class="form-input" 
+                                    placeholder="Sheet1!A:Z"
+                                    value="Sheet1!A:Z"
+                                >
+                                <small class="form-help">Default: Sheet1!A:Z</small>
+                            </div>
+                            <div id="configError" class="config-error" style="display: none;"></div>
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn-primary">
+                                    <i class="fas fa-check"></i> Connect
+                                </button>
+                                <button type="button" class="btn btn-secondary" id="cancelConfigBtn">
+                                    Cancel
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
                 <div class="search-section">
                     <div class="search-wrapper">
                         <div class="search-container">
@@ -40,9 +84,6 @@
                                 placeholder="Search by name or company..."
                                 autocomplete="off"
                             >
-                            <div class="search-loading" id="searchLoading" style="display: none;">
-                                <i class="fas fa-spinner fa-spin"></i>
-                            </div>
                         </div>
                         <div class="show-details-toggle">
                             <label class="toggle-label">
@@ -58,10 +99,6 @@
 
                 <div class="results-section">
                     <div id="searchResults" class="search-results">
-                        <div class="empty-state">
-                            <i class="fas fa-search"></i>
-                            <p>Start typing to search for attendees</p>
-                        </div>
                     </div>
                 </div>
             </div>

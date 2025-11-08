@@ -4,12 +4,24 @@ class AttendeeCheckInApp {
     constructor() {
         this.searchInput = document.getElementById('searchInput');
         this.searchResults = document.getElementById('searchResults');
-        this.searchLoading = document.getElementById('searchLoading');
         this.checkedInCount = document.getElementById('checkedInCount');
         this.syncButton = document.getElementById('syncButton');
         this.showDetailsToggle = document.getElementById('showDetailsToggle');
         
+        // Sheet configuration elements
+        this.sheetConfigModal = document.getElementById('sheetConfigModal');
+        this.sheetConfigForm = document.getElementById('sheetConfigForm');
+        this.sheetIdInput = document.getElementById('sheetIdInput');
+        this.rangeInput = document.getElementById('rangeInput');
+        this.cancelConfigBtn = document.getElementById('cancelConfigBtn');
+        this.configGearBtn = document.getElementById('configGearBtn');
+        this.configError = document.getElementById('configError');
+        
         this.searchTimeout = null;
+        
+        // Sheet configuration
+        this.sheetId = null;
+        this.sheetRange = 'Sheet1!A:Z';
         
         // Load show details preference from localStorage (default: true)
         this.showDetails = localStorage.getItem('showDetails') !== 'false';
@@ -21,14 +33,135 @@ class AttendeeCheckInApp {
     }
 
     init() {
+        this.loadSheetConfiguration();
         this.bindEvents();
-        this.loadAttendanceSummary();
-        this.loadDefaultResults();
         
-        // Poll attendance summary every 5 seconds to keep count updated
-        this.attendanceSummaryInterval = setInterval(() => {
+        // Only load data if sheet is configured
+        if (this.sheetId) {
             this.loadAttendanceSummary();
-        }, 5000);
+            this.loadDefaultResults();
+            
+            // Poll attendance summary every 5 seconds to keep count updated
+            this.attendanceSummaryInterval = setInterval(() => {
+                this.loadAttendanceSummary();
+            }, 5000);
+            
+            // Auto-refresh attendee list every 30 seconds to pick up external changes
+            this.autoRefreshInterval = setInterval(() => {
+                this.autoRefreshAttendeeList();
+            }, 30000); // 30 seconds
+        } else {
+            // Show configuration modal if no sheet ID found
+            this.showSheetConfigModal();
+        }
+    }
+    
+    loadSheetConfiguration() {
+        // Priority 1: Check URL parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        const sheetIdFromUrl = urlParams.get('sheetId');
+        const rangeFromUrl = urlParams.get('range');
+        
+        if (sheetIdFromUrl) {
+            this.sheetId = sheetIdFromUrl;
+            this.sheetRange = rangeFromUrl || 'Sheet1!A:Z';
+            // Save to localStorage for persistence
+            localStorage.setItem('googleSheetId', this.sheetId);
+            localStorage.setItem('googleSheetRange', this.sheetRange);
+            return;
+        }
+        
+        // Priority 2: Check localStorage
+        const storedSheetId = localStorage.getItem('googleSheetId');
+        const storedRange = localStorage.getItem('googleSheetRange');
+        
+        if (storedSheetId) {
+            this.sheetId = storedSheetId;
+            this.sheetRange = storedRange || 'Sheet1!A:Z';
+            return;
+        }
+        
+        // Priority 3: No configuration found - will show modal
+        this.sheetId = null;
+    }
+    
+    showSheetConfigModal() {
+        if (this.sheetConfigModal) {
+            this.sheetConfigModal.style.display = 'flex';
+            if (this.sheetIdInput && this.sheetId) {
+                this.sheetIdInput.value = this.sheetId;
+            }
+            if (this.rangeInput && this.sheetRange) {
+                this.rangeInput.value = this.sheetRange;
+            }
+        }
+    }
+    
+    hideSheetConfigModal() {
+        if (this.sheetConfigModal) {
+            this.sheetConfigModal.style.display = 'none';
+            this.configError.style.display = 'none';
+        }
+    }
+    
+    async validateAndSetSheet(sheetId, range) {
+        try {
+            // Validate sheet access
+            const response = await fetch(`/api/sheets/validate?sheetId=${encodeURIComponent(sheetId)}&range=${encodeURIComponent(range || 'Sheet1!A:Z')}`);
+            const data = await response.json();
+            
+            if (data.valid) {
+                this.sheetId = sheetId;
+                this.sheetRange = range || 'Sheet1!A:Z';
+                
+                // Save to localStorage
+                localStorage.setItem('googleSheetId', this.sheetId);
+                localStorage.setItem('googleSheetRange', this.sheetRange);
+                
+                // Update URL without reload (optional - for sharing)
+                const url = new URL(window.location);
+                url.searchParams.set('sheetId', this.sheetId);
+                if (this.sheetRange !== 'Sheet1!A:Z') {
+                    url.searchParams.set('range', this.sheetRange);
+                }
+                window.history.replaceState({}, '', url);
+                
+                this.hideSheetConfigModal();
+                
+                // Load data
+                this.loadAttendanceSummary();
+                this.loadDefaultResults();
+                
+                // Start polling
+                if (!this.attendanceSummaryInterval) {
+                    this.attendanceSummaryInterval = setInterval(() => {
+                        this.loadAttendanceSummary();
+                    }, 5000);
+                }
+                
+                if (!this.autoRefreshInterval) {
+                    this.autoRefreshInterval = setInterval(() => {
+                        this.autoRefreshAttendeeList();
+                    }, 30000);
+                }
+                
+                return true;
+            } else {
+                this.showConfigError(data.error || 'Failed to validate sheet access');
+                return false;
+            }
+        } catch (error) {
+            console.error('Validation error:', error);
+            this.showConfigError('Failed to connect to sheet. Please check your Sheet ID and ensure the sheet is shared with the service account.');
+            return false;
+        }
+    }
+    
+    showConfigError(message) {
+        if (this.configError) {
+            this.configError.textContent = message;
+            this.configError.style.display = 'block';
+        }
     }
 
     bindEvents() {
@@ -55,6 +188,39 @@ class AttendeeCheckInApp {
                 this.updateDetailsVisibility();
             });
         }
+        
+        // Sheet configuration events
+        if (this.sheetConfigForm) {
+            this.sheetConfigForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const sheetId = this.sheetIdInput.value.trim();
+                const range = this.rangeInput.value.trim() || 'Sheet1!A:Z';
+                
+                if (!sheetId) {
+                    this.showConfigError('Sheet ID is required');
+                    return;
+                }
+                
+                await this.validateAndSetSheet(sheetId, range);
+            });
+        }
+        
+        if (this.cancelConfigBtn) {
+            this.cancelConfigBtn.addEventListener('click', () => {
+                if (this.sheetId) {
+                    this.hideSheetConfigModal();
+                } else {
+                    // Can't cancel if no sheet configured - show error
+                    this.showConfigError('Sheet ID is required to use the application');
+                }
+            });
+        }
+        
+        if (this.configGearBtn) {
+            this.configGearBtn.addEventListener('click', () => {
+                this.showSheetConfigModal();
+            });
+        }
     }
 
     async handleSearch(query) {
@@ -63,17 +229,11 @@ class AttendeeCheckInApp {
             clearTimeout(this.searchTimeout);
         }
 
-        // Show loading state for short queries
-        if (query.length > 0) {
-            this.showLoading(true);
-        }
-
         // Debounce search to avoid too many API calls
         this.searchTimeout = setTimeout(async () => {
             if (query.trim().length === 0) {
                 // When search is cleared, show default results again
                 await this.loadDefaultResults();
-                this.showLoading(false);
                 return;
             }
 
@@ -83,24 +243,31 @@ class AttendeeCheckInApp {
             } catch (error) {
                 console.error('Search error:', error);
                 this.showError('Failed to search attendees');
-            } finally {
-                this.showLoading(false);
             }
         }, 300);
     }
 
     async searchAttendees(query) {
-        const response = await fetch(`/api/attendees/search?query=${encodeURIComponent(query)}`);
+        if (!this.sheetId) {
+            throw new Error('Sheet not configured');
+        }
+        const url = `/api/attendees/search?query=${encodeURIComponent(query)}&sheetId=${encodeURIComponent(this.sheetId)}&range=${encodeURIComponent(this.sheetRange)}`;
+        const response = await fetch(url);
         if (!response.ok) {
-            throw new Error('Search failed');
+            const error = await response.json().catch(() => ({ error: 'Search failed' }));
+            throw new Error(error.error || 'Search failed');
         }
         return await response.json();
     }
 
     async loadDefaultResults() {
+        if (!this.sheetId) {
+            return;
+        }
         try {
             // Load all attendees on page load
-            const response = await fetch('/api/attendees');
+            const url = `/api/attendees?sheetId=${encodeURIComponent(this.sheetId)}&range=${encodeURIComponent(this.sheetRange)}`;
+            const response = await fetch(url);
             if (response.ok) {
                 const results = await response.json();
                 // Show all results if available, otherwise show empty state
@@ -110,7 +277,12 @@ class AttendeeCheckInApp {
                     this.showEmptyState();
                 }
             } else {
-                this.showEmptyState();
+                const error = await response.json().catch(() => ({ error: 'Failed to load attendees' }));
+                if (error.error && error.error.includes('Sheet ID is required')) {
+                    this.showSheetConfigModal();
+                } else {
+                    this.showEmptyState();
+                }
             }
         } catch (error) {
             console.error('Failed to load default results:', error);
@@ -171,16 +343,15 @@ class AttendeeCheckInApp {
             key !== spocField
         );
 
-        const detailsHTML = detailFields.map(field => {
-            const value = attendee[field];
-            if (value && value.trim()) {
-                return `<span class="detail-item">
+        const detailsHTML = detailFields
+            .filter(field => attendee[field] && String(attendee[field]).trim())
+            .map(field => `
+                <span class="detail-item">
                     <span class="detail-label">${this.formatFieldName(field)}:</span>
-                    <span class="detail-value">${value}</span>
-                </span>`;
-            }
-            return '';
-        }).filter(Boolean).join('');
+                    <span class="detail-value">${attendee[field]}</span>
+                </span>
+            `)
+            .join('');
 
         return `
             <div class="attendee-row ${attendee.checkedIn ? 'checked-in' : ''}" data-id="${attendee.id}">
@@ -204,28 +375,23 @@ class AttendeeCheckInApp {
                             <div class="attendee-company">
                                 ${this.getDisplayCompany(attendee)}
                             </div>
-                            ${printFields.length > 0 ? (() => {
-                                // Show the first print field in the header row
+                            ${printFields.length > 0 && attendee[printFields[0]] !== undefined && attendee[printFields[0]] !== null && attendee[printFields[0]] !== '' ? (() => {
                                 const printField = printFields[0];
                                 const printValue = attendee[printField];
-                                if (printValue !== undefined && printValue !== null && printValue !== '') {
-                                    const displayValue = typeof printValue === 'boolean' 
-                                        ? (printValue ? 'Yes' : 'No')
-                                        : String(printValue);
-                                    
-                                    // Determine if printed (positive values)
-                                    const isPrinted = printValue === true || 
-                                        String(printValue).toLowerCase() === 'yes' || 
-                                        String(printValue).toLowerCase() === 'true' ||
-                                        String(printValue).toLowerCase() === 'printed';
-                                    
-                                    return `
-                                        <div class="attendee-print-header">
-                                            <span class="print-badge ${isPrinted ? 'printed' : 'not-printed'}">${displayValue}</span>
-                                        </div>
-                                    `;
-                                }
-                                return '';
+                                const displayValue = typeof printValue === 'boolean' 
+                                    ? (printValue ? 'Yes' : 'No')
+                                    : String(printValue);
+                                
+                                const isPrinted = printValue === true || 
+                                    String(printValue).toLowerCase() === 'yes' || 
+                                    String(printValue).toLowerCase() === 'true' ||
+                                    String(printValue).toLowerCase() === 'printed';
+                                
+                                return `
+                                    <div class="attendee-print-header">
+                                        <span class="print-badge ${isPrinted ? 'printed' : 'not-printed'}">${displayValue}</span>
+                                    </div>
+                                `;
                             })() : ''}
                             ${this.getDisplaySpoc(attendee) ? `
                                 <div class="attendee-spoc">
@@ -235,29 +401,32 @@ class AttendeeCheckInApp {
                             ` : ''}
                         </div>
                         ${colorFields.length > 0 ? (() => {
-                            const colorPills = colorFields.map(colorField => {
-                                const colorValue = attendee[colorField];
-                                if (!colorValue) return '';
-                                
-                                const parsedColor = this.parseColorValue(colorValue);
-                                if (parsedColor) {
-                                    const textColor = this.getTextColorForBackground(parsedColor);
-                                    const styleAttr = `style="background-color: ${parsedColor}; color: ${textColor};"`;
+                            const colorPills = colorFields
+                                .filter(colorField => attendee[colorField])
+                                .map(colorField => {
+                                    const colorValue = attendee[colorField];
+                                    const parsedColor = this.parseColorValue(colorValue);
+                                    const colorLabel = this.formatFieldName(colorField);
+                                    
+                                    if (parsedColor) {
+                                        const textColor = this.getTextColorForBackground(parsedColor);
+                                        const styleAttr = `style="background-color: ${parsedColor}; color: ${textColor};"`;
+                                        return `
+                                            <div class="attendee-color-item">
+                                                <span class="color-label">${colorLabel}:</span>
+                                                <span class="color-pill" ${styleAttr}>${colorValue}</span>
+                                            </div>
+                                        `;
+                                    }
+                                    
                                     return `
-                                    <div class="attendee-color-item">
-                                        <span class="color-label">${this.formatFieldName(colorField)}:</span>
-                                        <span class="color-pill" ${styleAttr}>${colorValue}</span>
-                                    </div>
-                                `;
-                                } else {
-                                    return `
-                                    <div class="attendee-color-item">
-                                        <span class="color-label">${this.formatFieldName(colorField)}:</span>
-                                        <span class="color-pill">${colorValue}</span>
-                                    </div>
-                                `;
-                                }
-                            }).filter(Boolean).join('');
+                                        <div class="attendee-color-item">
+                                            <span class="color-label">${colorLabel}:</span>
+                                            <span class="color-pill">${colorValue}</span>
+                                        </div>
+                                    `;
+                                })
+                                .join('');
                             
                             return colorPills ? `<div class="attendee-color-row">${colorPills}</div>` : '';
                         })() : ''}
@@ -426,9 +595,18 @@ class AttendeeCheckInApp {
     }
 
     async handleCheckIn(checkbox) {
+        if (!this.sheetId) {
+            this.showError('Sheet not configured');
+            checkbox.checked = !checkbox.checked; // Revert checkbox
+            return;
+        }
+        
         const attendeeId = checkbox.id.replace('check-', '');
         const checkedIn = checkbox.checked;
         const row = checkbox.closest('.attendee-row');
+
+        // Disable checkbox during request
+        checkbox.disabled = true;
 
         try {
             const response = await fetch(`/api/attendees/${attendeeId}/checkin`, {
@@ -436,7 +614,11 @@ class AttendeeCheckInApp {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ checkedIn })
+                body: JSON.stringify({ 
+                    checkedIn,
+                    sheetId: this.sheetId,
+                    range: this.sheetRange
+                })
             });
 
             const result = await response.json();
@@ -447,17 +629,15 @@ class AttendeeCheckInApp {
                 const errorMsg = result.error || result.warning || 'Check-in failed';
                 this.showError(errorMsg);
                 if (result.warning) {
-                    // Show warning but don't revert UI if it's just a sync warning
                     console.warn('Check-in warning:', result.warning);
                 }
                 return;
             }
             
+            row.classList.toggle('checked-in', checkedIn);
             if (checkedIn) {
-                row.classList.add('checked-in');
                 this.showCheckInSuccess(attendeeId);
             } else {
-                row.classList.remove('checked-in');
                 this.showCheckOutSuccess(attendeeId);
             }
 
@@ -469,10 +649,17 @@ class AttendeeCheckInApp {
             // Revert checkbox state on error
             checkbox.checked = !checkedIn;
             this.showError('Failed to update attendance: ' + error.message);
+        } finally {
+            checkbox.disabled = false;
         }
     }
 
     async syncFromSheet() {
+        if (!this.sheetId) {
+            this.showError('Sheet not configured');
+            return;
+        }
+        
         if (this.syncButton.classList.contains('syncing')) {
             return; // Already syncing
         }
@@ -482,7 +669,14 @@ class AttendeeCheckInApp {
             this.syncButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i><span>Syncing...</span>';
 
             const response = await fetch('/api/attendance/sync-from-sheet', {
-                method: 'POST'
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    sheetId: this.sheetId,
+                    range: this.sheetRange
+                })
             });
 
             if (!response.ok) {
@@ -497,10 +691,15 @@ class AttendeeCheckInApp {
             // Update attendance summary
             this.loadAttendanceSummary();
             
-            // If there are search results, refresh them to show updated status
+            // Refresh the displayed results to show updated status from sheet
             const currentQuery = this.searchInput.value.trim();
             if (currentQuery) {
-                this.handleSearch(currentQuery);
+                // Refresh search results
+                const results = await this.searchAttendees(currentQuery);
+                this.displayResults(results);
+            } else {
+                // Refresh default results
+                await this.loadDefaultResults();
             }
             
         } catch (error) {
@@ -533,8 +732,12 @@ class AttendeeCheckInApp {
     }
 
     async loadAttendanceSummary() {
+        if (!this.sheetId) {
+            return;
+        }
         try {
-            const response = await fetch('/api/attendance/summary');
+            const url = `/api/attendance/summary?sheetId=${encodeURIComponent(this.sheetId)}&range=${encodeURIComponent(this.sheetRange)}`;
+            const response = await fetch(url);
             if (response.ok) {
                 const summary = await response.json();
                 // Update only the header count
@@ -545,17 +748,36 @@ class AttendeeCheckInApp {
         }
     }
 
-    showLoading(show) {
-        this.searchLoading.style.display = show ? 'block' : 'none';
+    async autoRefreshAttendeeList() {
+        if (!this.sheetId) {
+            return;
+        }
+        
+        // Only refresh if there are currently displayed results
+        const currentQuery = this.searchInput.value.trim();
+        if (currentQuery) {
+            // If user is searching, refresh the search results
+            try {
+                const results = await this.searchAttendees(currentQuery);
+                this.displayResults(results);
+            } catch (error) {
+                // Silently fail - don't interrupt user experience
+                console.debug('Auto-refresh failed:', error);
+            }
+        } else {
+            // If showing default results, refresh them
+            try {
+                await this.loadDefaultResults();
+            } catch (error) {
+                // Silently fail - don't interrupt user experience
+                console.debug('Auto-refresh failed:', error);
+            }
+        }
     }
 
     showEmptyState() {
-        this.searchResults.innerHTML = `
-            <div class="empty-state">
-                <i class="fas fa-search"></i>
-                <p>Start typing to search for attendees</p>
-            </div>
-        `;
+        // Just clear the results - no message needed
+        this.searchResults.innerHTML = '';
     }
 
     showNoResults() {
@@ -581,9 +803,7 @@ class AttendeeCheckInApp {
         
         // Remove after 3 seconds
         setTimeout(() => {
-            if (errorDiv.parentNode) {
-                errorDiv.parentNode.removeChild(errorDiv);
-            }
+            errorDiv.remove();
         }, 3000);
     }
 
@@ -600,9 +820,7 @@ class AttendeeCheckInApp {
         
         // Remove after 3 seconds
         setTimeout(() => {
-            if (successDiv.parentNode) {
-                successDiv.parentNode.removeChild(successDiv);
-            }
+            successDiv.remove();
         }, 3000);
     }
 }
