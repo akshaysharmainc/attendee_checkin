@@ -30,17 +30,25 @@
         <main class="main">
             <div class="container">
                 <div class="search-section">
-                    <div class="search-container">
-                        <i class="fas fa-search search-icon"></i>
-                        <input 
-                            type="text" 
-                            id="searchInput" 
-                            class="search-input" 
-                            placeholder="Search by name or company..."
-                            autocomplete="off"
-                        >
-                        <div class="search-loading" id="searchLoading" style="display: none;">
-                            <i class="fas fa-spinner fa-spin"></i>
+                    <div class="search-wrapper">
+                        <div class="search-container">
+                            <i class="fas fa-search search-icon"></i>
+                            <input 
+                                type="text" 
+                                id="searchInput" 
+                                class="search-input" 
+                                placeholder="Search by name or company..."
+                                autocomplete="off"
+                            >
+                            <div class="search-loading" id="searchLoading" style="display: none;">
+                                <i class="fas fa-spinner fa-spin"></i>
+                            </div>
+                        </div>
+                        <div class="show-details-toggle">
+                            <label class="toggle-label">
+                                <input type="checkbox" id="showDetailsToggle" checked>
+                                <span class="toggle-text">Show Details</span>
+                            </label>
                         </div>
                     </div>
                     <div class="search-tips">
@@ -53,24 +61,6 @@
                         <div class="empty-state">
                             <i class="fas fa-search"></i>
                             <p>Start typing to search for attendees</p>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="attendance-summary" id="attendanceSummary" style="display: none;">
-                    <h3>Attendance Summary</h3>
-                    <div class="summary-grid">
-                        <div class="summary-card">
-                            <div class="summary-number" id="totalAttendees">0</div>
-                            <div class="summary-label">Total Attendees</div>
-                        </div>
-                        <div class="summary-card">
-                            <div class="summary-number" id="totalCheckedIn">0</div>
-                            <div class="summary-label">Checked In</div>
-                        </div>
-                        <div class="summary-card">
-                            <div class="summary-number" id="checkInRate">0%</div>
-                            <div class="summary-label">Check-in Rate</div>
                         </div>
                     </div>
                 </div>

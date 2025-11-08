@@ -122,19 +122,27 @@ if (SHEET_ID && credentials) {
 }
 
 // Store attendance data in memory (in production, use a database)
+// Note: This is now primarily used as a cache. Check-in status is read from Google Sheets.
 let attendanceData = new Map();
 
-// Function to update Google Sheet with check-in status
-async function updateSheetCheckInStatus(rowIndex, checkedIn, checkInTime) {
-    if (!sheets || !auth) {
-        console.log('Google Sheets not available, skipping sheet update');
-        return;
+// Retry helper function for Google Sheets API calls
+async function retryOperation(operation, maxRetries = 3, delay = 1000) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            return await operation();
+        } catch (error) {
+            if (attempt === maxRetries) {
+                throw error;
+            }
+            console.log(`Retry attempt ${attempt}/${maxRetries} after error:`, error.message);
+            await new Promise(resolve => setTimeout(resolve, delay * attempt));
+        }
     }
+}
 
+// Function to ensure check-in columns exist (idempotent)
+async function ensureCheckInColumns(authClient) {
     try {
-        const authClient = await auth.getClient();
-        
-        // First, let's get the current sheet structure to see where to add check-in columns
         const response = await sheets.spreadsheets.values.get({
             auth: authClient,
             spreadsheetId: SHEET_ID,
@@ -143,13 +151,11 @@ async function updateSheetCheckInStatus(rowIndex, checkedIn, checkInTime) {
 
         const rows = response.data.values;
         if (!rows || rows.length === 0) {
-            console.log('No data found in sheet');
-            return;
+            return { checkInStatusCol: -1, checkInTimeCol: -1 };
         }
 
         const headers = rows[0];
         
-        // Find or create check-in status and timestamp columns
         let checkInStatusCol = headers.findIndex(h => 
             h.toLowerCase().includes('check-in') || 
             h.toLowerCase().includes('checked') || 
@@ -161,70 +167,171 @@ async function updateSheetCheckInStatus(rowIndex, checkedIn, checkInTime) {
             h.toLowerCase().includes('timestamp')
         );
 
-        // If columns don't exist, we'll add them
+        // Create columns if they don't exist (idempotent - check again after potential creation)
         if (checkInStatusCol === -1) {
-            // Add check-in status column
             const newRange = `${RANGE.split('!')[0]}!${String.fromCharCode(65 + headers.length)}1`;
-            await sheets.spreadsheets.values.update({
-                auth: authClient,
-                spreadsheetId: SHEET_ID,
-                range: newRange,
-                valueInputOption: 'RAW',
-                resource: {
-                    values: [['Check-In Status']]
-                }
-            });
-            checkInStatusCol = headers.length;
-            console.log('✅ Added Check-In Status column to sheet');
+            try {
+                await retryOperation(async () => {
+                    await sheets.spreadsheets.values.update({
+                        auth: authClient,
+                        spreadsheetId: SHEET_ID,
+                        range: newRange,
+                        valueInputOption: 'RAW',
+                        resource: {
+                            values: [['Check-In Status']]
+                        }
+                    });
+                });
+                // Re-fetch to get updated headers
+                const updatedResponse = await sheets.spreadsheets.values.get({
+                    auth: authClient,
+                    spreadsheetId: SHEET_ID,
+                    range: RANGE,
+                });
+                const updatedHeaders = updatedResponse.data.values[0];
+                checkInStatusCol = updatedHeaders.findIndex(h => 
+                    h.toLowerCase().includes('check-in') || 
+                    h.toLowerCase().includes('checked') || 
+                    h.toLowerCase().includes('attendance')
+                );
+            } catch (error) {
+                // Column might have been created by another request - try to find it
+                const updatedResponse = await sheets.spreadsheets.values.get({
+                    auth: authClient,
+                    spreadsheetId: SHEET_ID,
+                    range: RANGE,
+                });
+                const updatedHeaders = updatedResponse.data.values[0];
+                checkInStatusCol = updatedHeaders.findIndex(h => 
+                    h.toLowerCase().includes('check-in') || 
+                    h.toLowerCase().includes('checked') || 
+                    h.toLowerCase().includes('attendance')
+                );
+            }
         }
 
         if (checkInTimeCol === -1) {
-            // Add check-in time column
-            const newRange = `${RANGE.split('!')[0]}!${String.fromCharCode(66 + headers.length)}1`;
-            await sheets.spreadsheets.values.update({
+            const newRange = `${RANGE.split('!')[0]}!${String.fromCharCode(65 + (checkInStatusCol !== -1 ? checkInStatusCol + 1 : headers.length))}1`;
+            try {
+                await retryOperation(async () => {
+                    await sheets.spreadsheets.values.update({
+                        auth: authClient,
+                        spreadsheetId: SHEET_ID,
+                        range: newRange,
+                        valueInputOption: 'RAW',
+                        resource: {
+                            values: [['Check-In Time']]
+                        }
+                    });
+                });
+                // Re-fetch to get updated headers
+                const updatedResponse = await sheets.spreadsheets.values.get({
+                    auth: authClient,
+                    spreadsheetId: SHEET_ID,
+                    range: RANGE,
+                });
+                const updatedHeaders = updatedResponse.data.values[0];
+                checkInTimeCol = updatedHeaders.findIndex(h => 
+                    h.toLowerCase().includes('time') || 
+                    h.toLowerCase().includes('timestamp')
+                );
+            } catch (error) {
+                // Column might have been created by another request - try to find it
+                const updatedResponse = await sheets.spreadsheets.values.get({
+                    auth: authClient,
+                    spreadsheetId: SHEET_ID,
+                    range: RANGE,
+                });
+                const updatedHeaders = updatedResponse.data.values[0];
+                checkInTimeCol = updatedHeaders.findIndex(h => 
+                    h.toLowerCase().includes('time') || 
+                    h.toLowerCase().includes('timestamp')
+                );
+            }
+        }
+
+        return { checkInStatusCol, checkInTimeCol };
+    } catch (error) {
+        console.error('Error ensuring check-in columns:', error);
+        return { checkInStatusCol: -1, checkInTimeCol: -1 };
+    }
+}
+
+// Function to update Google Sheet with check-in status
+async function updateSheetCheckInStatus(rowIndex, checkedIn, checkInTime) {
+    if (!sheets || !auth) {
+        console.log('Google Sheets not available, skipping sheet update');
+        return { success: false, error: 'Google Sheets not configured' };
+    }
+
+    try {
+        const authClient = await auth.getClient();
+        
+        // Ensure check-in columns exist (idempotent)
+        const { checkInStatusCol, checkInTimeCol } = await ensureCheckInColumns(authClient);
+        
+        if (checkInStatusCol === -1) {
+            throw new Error('Could not find or create check-in status column');
+        }
+
+        // Validate row index
+        const response = await retryOperation(async () => {
+            return await sheets.spreadsheets.values.get({
                 auth: authClient,
                 spreadsheetId: SHEET_ID,
-                range: newRange,
-                valueInputOption: 'RAW',
-                resource: {
-                    values: [['Check-In Time']]
-                }
+                range: RANGE,
             });
-            checkInTimeCol = headers.length + 1;
-            console.log('✅ Added Check-In Time column to sheet');
+        });
+
+        const rows = response.data.values;
+        if (!rows || rows.length === 0) {
+            throw new Error('No data found in sheet');
+        }
+
+        if (rowIndex < 1 || rowIndex >= rows.length) {
+            throw new Error(`Invalid row index: ${rowIndex}. Sheet has ${rows.length - 1} data rows.`);
         }
 
         // Update the specific row with check-in status and time
         const statusRange = `${RANGE.split('!')[0]}!${String.fromCharCode(65 + checkInStatusCol)}${rowIndex + 1}`;
-        const timeRange = `${RANGE.split('!')[0]}!${String.fromCharCode(65 + checkInTimeCol)}${rowIndex + 1}`;
+        const timeRange = checkInTimeCol !== -1 
+            ? `${RANGE.split('!')[0]}!${String.fromCharCode(65 + checkInTimeCol)}${rowIndex + 1}`
+            : null;
 
-        // Update check-in status
-        await sheets.spreadsheets.values.update({
-            auth: authClient,
-            spreadsheetId: SHEET_ID,
-            range: statusRange,
-            valueInputOption: 'RAW',
-            resource: {
-                values: [[checkedIn === true]]
-            }
+        // Update check-in status with retry (using boolean value)
+        await retryOperation(async () => {
+            await sheets.spreadsheets.values.update({
+                auth: authClient,
+                spreadsheetId: SHEET_ID,
+                range: statusRange,
+                valueInputOption: 'RAW',
+                resource: {
+                    values: [[checkedIn]]  // Write boolean true/false
+                }
+            });
         });
 
-        // Update check-in time
-        await sheets.spreadsheets.values.update({
-            auth: authClient,
-            spreadsheetId: SHEET_ID,
-            range: timeRange,
-            valueInputOption: 'RAW',
-            resource: {
-                values: [[checkInTime || '']]
-            }
-        });
+        // Update check-in time with retry (if column exists)
+        if (timeRange && checkInTimeCol !== -1) {
+            await retryOperation(async () => {
+                await sheets.spreadsheets.values.update({
+                    auth: authClient,
+                    spreadsheetId: SHEET_ID,
+                    range: timeRange,
+                    valueInputOption: 'RAW',
+                    resource: {
+                        values: [[checkInTime || '']]
+                    }
+                });
+            });
+        }
 
         console.log(`✅ Updated sheet for row ${rowIndex + 1}: ${checkedIn ? 'Checked In' : 'Not Checked In'}`);
+        return { success: true };
         
     } catch (error) {
         console.error('Error updating Google Sheet:', error);
-        // Don't throw error - we still want the check-in to work locally
+        return { success: false, error: error.message };
     }
 }
 
@@ -234,10 +341,12 @@ async function getAttendees() {
         try {
             const authClient = await auth.getClient();
             
-            const response = await sheets.spreadsheets.values.get({
-                auth: authClient,
-                spreadsheetId: SHEET_ID,
-                range: RANGE,
+            const response = await retryOperation(async () => {
+                return await sheets.spreadsheets.values.get({
+                    auth: authClient,
+                    spreadsheetId: SHEET_ID,
+                    range: RANGE,
+                });
             });
 
             const rows = response.data.values;
@@ -247,16 +356,54 @@ async function getAttendees() {
 
             // Assume first row contains headers
             const headers = rows[0];
+            
+            // Find check-in status and time columns
+            const checkInStatusCol = headers.findIndex(h => 
+                h.toLowerCase().includes('check-in') || 
+                h.toLowerCase().includes('checked') || 
+                h.toLowerCase().includes('attendance')
+            );
+            
+            const checkInTimeCol = headers.findIndex(h => 
+                h.toLowerCase().includes('time') || 
+                h.toLowerCase().includes('timestamp')
+            );
+
             const attendees = rows.slice(1).map((row, index) => {
                 const attendee = {
-                    id: index + 1,
-                    checkedIn: attendanceData.has(index + 1) ? attendanceData.get(index + 1) : false,
-                    checkInTime: attendanceData.has(index + 1) ? attendanceData.get(index + 1) : null
+                    id: index + 1
                 };
+                
+                // Read check-in status directly from Google Sheet (source of truth)
+                if (checkInStatusCol !== -1 && row[checkInStatusCol] !== undefined && row[checkInStatusCol] !== '') {
+                    const status = row[checkInStatusCol];
+                    const isCheckedIn = (
+                        status === true ||
+                        status === 1 ||
+                        (typeof status === 'string' && (
+                            status.toLowerCase().includes('checked') ||
+                            status.toLowerCase().includes('yes') ||
+                            status.toLowerCase() === 'true'
+                        ))
+                    );
+                    
+                    attendee.checkedIn = isCheckedIn;
+                    attendee.checkInTime = (isCheckedIn && checkInTimeCol !== -1 && row[checkInTimeCol]) 
+                        ? row[checkInTimeCol] 
+                        : null;
+                } else if (checkInStatusCol !== -1 && row[checkInStatusCol] === false) {
+                    // Handle explicit false boolean value
+                    attendee.checkedIn = false;
+                    attendee.checkInTime = null;
+                } else {
+                    // Fallback to in-memory cache if columns don't exist yet
+                    attendee.checkedIn = attendanceData.has(index + 1) ? true : false;
+                    attendee.checkInTime = attendanceData.has(index + 1) ? attendanceData.get(index + 1) : null;
+                }
                 
                 // Map each column to a property
                 headers.forEach((header, colIndex) => {
-                    if (row[colIndex]) {
+                    if (row[colIndex] !== undefined && row[colIndex] !== '') {
                         attendee[header.toLowerCase().replace(/\s+/g, '_')] = row[colIndex];
                     }
                 });
@@ -274,7 +421,7 @@ async function getAttendees() {
         // Return demo data with attendance status
         return DEMO_ATTENDEES.map(attendee => ({
             ...attendee,
-            checkedIn: attendanceData.has(attendee.id) ? attendanceData.get(attendee.id) : false,
+            checkedIn: attendanceData.has(attendee.id) ? true : false,
             checkInTime: attendanceData.has(attendee.id) ? attendanceData.get(attendee.id) : null
         }));
     }
@@ -326,38 +473,108 @@ app.post('/api/attendees/:id/checkin', async (req, res) => {
     const { checkedIn } = req.body;
     const attendeeId = parseInt(id);
     
-    if (checkedIn) {
-        const checkInTime = new Date().toISOString();
-        attendanceData.set(attendeeId, checkInTime);
-        
-        // Update Google Sheet
-        await updateSheetCheckInStatus(attendeeId, true, checkInTime);
-    } else {
-        attendanceData.delete(attendeeId);
-        
-        // Update Google Sheet
-        await updateSheetCheckInStatus(attendeeId, false, null);
+    // Validate input
+    if (isNaN(attendeeId) || attendeeId < 1) {
+        return res.status(400).json({ 
+            success: false, 
+            error: 'Invalid attendee ID' 
+        });
+    }
+
+    if (typeof checkedIn !== 'boolean') {
+        return res.status(400).json({ 
+            success: false, 
+            error: 'checkedIn must be a boolean' 
+        });
     }
     
-    res.json({ 
-        success: true, 
-        checkedIn: checkedIn,
-        checkInTime: checkedIn ? attendanceData.get(attendeeId) : null
-    });
+    try {
+        const checkInTime = checkedIn ? new Date().toISOString() : null;
+        
+        // Update Google Sheet first (source of truth)
+        const sheetUpdate = await updateSheetCheckInStatus(attendeeId, checkedIn, checkInTime);
+        
+        if (!sheetUpdate.success) {
+            // If sheet update fails, still update local cache but warn user
+            console.warn(`Sheet update failed for attendee ${attendeeId}, but updating local cache`);
+            if (checkedIn) {
+                attendanceData.set(attendeeId, checkInTime);
+            } else {
+                attendanceData.delete(attendeeId);
+            }
+            
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Failed to update Google Sheet: ' + sheetUpdate.error,
+                checkedIn: checkedIn,
+                checkInTime: checkInTime,
+                warning: 'Check-in saved locally but may not be synced to sheet'
+            });
+        }
+        
+        // Update local cache only after successful sheet update
+        if (checkedIn) {
+            attendanceData.set(attendeeId, checkInTime);
+        } else {
+            attendanceData.delete(attendeeId);
+        }
+        
+        res.json({ 
+            success: true, 
+            checkedIn: checkedIn,
+            checkInTime: checkInTime
+        });
+    } catch (error) {
+        console.error('Error in check-in endpoint:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Internal server error: ' + error.message 
+        });
+    }
 });
 
 // Get attendance summary
-app.get('/api/attendance/summary', (req, res) => {
-    const totalCheckedIn = attendanceData.size;
-    const checkIns = Array.from(attendanceData.entries()).map(([id, time]) => ({
-        id,
-        checkInTime: time
-    }));
-    
-    res.json({
-        totalCheckedIn,
-        checkIns
-    });
+app.get('/api/attendance/summary', async (req, res) => {
+    try {
+        // Read from Google Sheets (source of truth) if available
+        if (auth && SHEET_ID) {
+            const attendees = await getAttendees();
+            const checkedInAttendees = attendees.filter(a => a.checkedIn);
+            
+            return res.json({
+                totalCheckedIn: checkedInAttendees.length,
+                checkIns: checkedInAttendees.map(a => ({
+                    id: a.id,
+                    checkInTime: a.checkInTime
+                }))
+            });
+        }
+        
+        // Fallback to in-memory cache
+        const totalCheckedIn = attendanceData.size;
+        const checkIns = Array.from(attendanceData.entries()).map(([id, time]) => ({
+            id,
+            checkInTime: time
+        }));
+        
+        res.json({
+            totalCheckedIn,
+            checkIns
+        });
+    } catch (error) {
+        console.error('Error getting attendance summary:', error);
+        // Fallback to in-memory cache on error
+        const totalCheckedIn = attendanceData.size;
+        const checkIns = Array.from(attendanceData.entries()).map(([id, time]) => ({
+            id,
+            checkInTime: time
+        }));
+        
+        res.json({
+            totalCheckedIn,
+            checkIns
+        });
+    }
 });
 
 // New endpoint to sync attendance data from sheet on startup
@@ -368,10 +585,12 @@ app.post('/api/attendance/sync-from-sheet', async (req, res) => {
         }
 
         const authClient = await auth.getClient();
-        const response = await sheets.spreadsheets.values.get({
-            auth: authClient,
-            spreadsheetId: SHEET_ID,
-            range: RANGE,
+        const response = await retryOperation(async () => {
+            return await sheets.spreadsheets.values.get({
+                auth: authClient,
+                spreadsheetId: SHEET_ID,
+                range: RANGE,
+            });
         });
 
         const rows = response.data.values;
