@@ -271,6 +271,18 @@ async function retryOperation(operation, maxRetries = 3, delay = 1000) {
     }
 }
 
+// Helper function to convert column index (0-based) to Google Sheets column letter (A, B, ..., Z, AA, AB, ...)
+function columnIndexToLetter(index) {
+    let result = '';
+    index++; // Convert to 1-based
+    while (index > 0) {
+        index--; // Convert to 0-based for modulo
+        result = String.fromCharCode(65 + (index % 26)) + result;
+        index = Math.floor(index / 26);
+    }
+    return result;
+}
+
 // Function to ensure check-in columns exist (idempotent)
 async function ensureCheckInColumns(authClient, sheetId, range) {
     try {
@@ -298,10 +310,41 @@ async function ensureCheckInColumns(authClient, sheetId, range) {
             h.toLowerCase().includes('timestamp')
         );
 
+        // Helper function to find the first empty column (no header, no data)
+        const findEmptyColumn = (startFrom = 0) => {
+            // Check up to 100 columns beyond the current range to find an empty one
+            const maxCheck = Math.max(headers.length + 100, 100);
+            for (let i = startFrom; i < maxCheck; i++) {
+                // Check if this column index exists in headers and is empty
+                if (i >= headers.length) {
+                    // Beyond current range - this is safe to use
+                    return i;
+                }
+                // Check if header is empty or undefined
+                if (!headers[i] || headers[i].trim() === '') {
+                    // Also check if there's any data in this column (check a few rows)
+                    let hasData = false;
+                    for (let rowIdx = 1; rowIdx < Math.min(rows.length, 10); rowIdx++) {
+                        if (rows[rowIdx] && rows[rowIdx][i] !== undefined && rows[rowIdx][i] !== '') {
+                            hasData = true;
+                            break;
+                        }
+                    }
+                    if (!hasData) {
+                        return i;
+                    }
+                }
+            }
+            // Fallback: use the end of current headers (but this could overwrite)
+            return headers.length;
+        };
+
         // Create columns if they don't exist (idempotent - check again after potential creation)
         if (checkInStatusCol === -1) {
             const sheetName = range.split('!')[0];
-            const newRange = `${sheetName}!${String.fromCharCode(65 + headers.length)}1`;
+            const emptyColIndex = findEmptyColumn();
+            const columnLetter = columnIndexToLetter(emptyColIndex);
+            const newRange = `${sheetName}!${columnLetter}1`;
             try {
                 await retryOperation(async () => {
                     await sheets.spreadsheets.values.update({
@@ -330,8 +373,8 @@ async function ensureCheckInColumns(authClient, sheetId, range) {
                 // Column might have been created by another request - try to find it
                 const updatedResponse = await sheets.spreadsheets.values.get({
                     auth: authClient,
-                    spreadsheetId: SHEET_ID,
-                    range: RANGE,
+                    spreadsheetId: sheetId,
+                    range: range,
                 });
                 const updatedHeaders = updatedResponse.data.values[0];
                 checkInStatusCol = updatedHeaders.findIndex(h => 
@@ -344,7 +387,11 @@ async function ensureCheckInColumns(authClient, sheetId, range) {
 
         if (checkInTimeCol === -1) {
             const sheetName = range.split('!')[0];
-            const newRange = `${sheetName}!${String.fromCharCode(65 + (checkInStatusCol !== -1 ? checkInStatusCol + 1 : headers.length))}1`;
+            // Find empty column starting after the status column (if it exists)
+            const startFrom = checkInStatusCol !== -1 ? checkInStatusCol + 1 : 0;
+            const emptyColIndex = findEmptyColumn(startFrom);
+            const columnLetter = columnIndexToLetter(emptyColIndex);
+            const newRange = `${sheetName}!${columnLetter}1`;
             try {
                 await retryOperation(async () => {
                     await sheets.spreadsheets.values.update({
@@ -431,9 +478,9 @@ async function updateSheetCheckInStatus(rowIndex, checkedIn, checkInTime, sheetI
 
         // Update the specific row with check-in status and time
         const sheetName = range.split('!')[0];
-        const statusRange = `${sheetName}!${String.fromCharCode(65 + checkInStatusCol)}${rowIndex + 1}`;
+        const statusRange = `${sheetName}!${columnIndexToLetter(checkInStatusCol)}${rowIndex + 1}`;
         const timeRange = checkInTimeCol !== -1 
-            ? `${sheetName}!${String.fromCharCode(65 + checkInTimeCol)}${rowIndex + 1}`
+            ? `${sheetName}!${columnIndexToLetter(checkInTimeCol)}${rowIndex + 1}`
             : null;
 
         // Update check-in status with retry (using boolean value)
