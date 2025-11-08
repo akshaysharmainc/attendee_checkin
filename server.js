@@ -479,94 +479,101 @@ async function getAttendees(sheetId, range) {
     const targetSheetId = sheetId || DEFAULT_SHEET_ID;
     const targetRange = range || DEFAULT_RANGE;
     
-    if (auth && targetSheetId) {
-        try {
-            const authClient = await auth.getClient();
-            
-            const response = await retryOperation(async () => {
-                return await sheets.spreadsheets.values.get({
-                    auth: authClient,
-                    spreadsheetId: targetSheetId,
-                    range: targetRange,
-                });
-            });
-
-            const rows = response.data.values;
-            if (!rows || rows.length === 0) {
-                return DEMO_ATTENDEES;
-            }
-
-            // Assume first row contains headers
-            const headers = rows[0];
-            
-            // Find check-in status and time columns
-            const checkInStatusCol = headers.findIndex(h => 
-                h.toLowerCase().includes('check-in') || 
-                h.toLowerCase().includes('checked') || 
-                h.toLowerCase().includes('attendance')
-            );
-            
-            const checkInTimeCol = headers.findIndex(h => 
-                h.toLowerCase().includes('time') || 
-                h.toLowerCase().includes('timestamp')
-            );
-
-            const attendees = rows.slice(1).map((row, index) => {
-                const attendee = {
-                    id: index + 1
-                };
-                
-                // Read check-in status directly from Google Sheet (source of truth)
-                if (checkInStatusCol !== -1 && row[checkInStatusCol] !== undefined && row[checkInStatusCol] !== '') {
-                    const status = row[checkInStatusCol];
-                    const isCheckedIn = (
-                        status === true ||
-                        status === 1 ||
-                        (typeof status === 'string' && (
-                            status.toLowerCase().includes('checked') ||
-                            status.toLowerCase().includes('yes') ||
-                            status.toLowerCase() === 'true'
-                        ))
-                    );
-                    
-                    attendee.checkedIn = isCheckedIn;
-                    attendee.checkInTime = (isCheckedIn && checkInTimeCol !== -1 && row[checkInTimeCol]) 
-                        ? row[checkInTimeCol] 
-                        : null;
-                } else if (checkInStatusCol !== -1 && row[checkInStatusCol] === false) {
-                    // Handle explicit false boolean value
-                    attendee.checkedIn = false;
-                    attendee.checkInTime = null;
-                } else {
-                    // Fallback to in-memory cache if columns don't exist yet
-                    attendee.checkedIn = attendanceData.has(index + 1) ? true : false;
-                    attendee.checkInTime = attendanceData.has(index + 1) ? attendanceData.get(index + 1) : null;
-                }
-                
-                // Map each column to a property
-                headers.forEach((header, colIndex) => {
-                    if (row[colIndex] !== undefined && row[colIndex] !== '') {
-                        attendee[header.toLowerCase().replace(/\s+/g, '_')] = row[colIndex];
-                    }
-                });
-                
-                return attendee;
-            });
-
-            return attendees;
-        } catch (error) {
-            console.error('Error fetching from Google Sheets:', error);
-            console.log('Falling back to demo data');
-            return DEMO_ATTENDEES;
+    // If no sheet ID is provided and no default is configured, return demo data (demo mode)
+    if (!targetSheetId) {
+        if (!auth) {
+            // Return demo data only when explicitly in demo mode (no auth, no sheet)
+            return DEMO_ATTENDEES.map(attendee => ({
+                ...attendee,
+                checkedIn: attendanceData.has(attendee.id) ? true : false,
+                checkInTime: attendanceData.has(attendee.id) ? attendanceData.get(attendee.id) : null
+            }));
+        } else {
+            // Auth is configured but no sheet ID - this is an error
+            throw new Error('Sheet ID is required');
         }
-    } else {
-        // Return demo data with attendance status
-        return DEMO_ATTENDEES.map(attendee => ({
-            ...attendee,
-            checkedIn: attendanceData.has(attendee.id) ? true : false,
-            checkInTime: attendanceData.has(attendee.id) ? attendanceData.get(attendee.id) : null
-        }));
     }
+    
+    // If auth is not configured but sheet ID is provided, throw error
+    if (!auth) {
+        throw new Error('Google Sheets authentication not configured. Please check your credentials.');
+    }
+    
+    // Try to fetch from Google Sheets
+    const authClient = await auth.getClient();
+    
+    const response = await retryOperation(async () => {
+        return await sheets.spreadsheets.values.get({
+            auth: authClient,
+            spreadsheetId: targetSheetId,
+            range: targetRange,
+        });
+    });
+
+    const rows = response.data.values;
+    if (!rows || rows.length === 0) {
+        // Return empty array instead of demo data when sheet is empty
+        return [];
+    }
+
+    // Assume first row contains headers
+    const headers = rows[0];
+    
+    // Find check-in status and time columns
+    const checkInStatusCol = headers.findIndex(h => 
+        h.toLowerCase().includes('check-in') || 
+        h.toLowerCase().includes('checked') || 
+        h.toLowerCase().includes('attendance')
+    );
+    
+    const checkInTimeCol = headers.findIndex(h => 
+        h.toLowerCase().includes('time') || 
+        h.toLowerCase().includes('timestamp')
+    );
+
+    const attendees = rows.slice(1).map((row, index) => {
+        const attendee = {
+            id: index + 1
+        };
+        
+        // Read check-in status directly from Google Sheet (source of truth)
+        if (checkInStatusCol !== -1 && row[checkInStatusCol] !== undefined && row[checkInStatusCol] !== '') {
+            const status = row[checkInStatusCol];
+            const isCheckedIn = (
+                status === true ||
+                status === 1 ||
+                (typeof status === 'string' && (
+                    status.toLowerCase().includes('checked') ||
+                    status.toLowerCase().includes('yes') ||
+                    status.toLowerCase() === 'true'
+                ))
+            );
+            
+            attendee.checkedIn = isCheckedIn;
+            attendee.checkInTime = (isCheckedIn && checkInTimeCol !== -1 && row[checkInTimeCol]) 
+                ? row[checkInTimeCol] 
+                : null;
+        } else if (checkInStatusCol !== -1 && row[checkInStatusCol] === false) {
+            // Handle explicit false boolean value
+            attendee.checkedIn = false;
+            attendee.checkInTime = null;
+        } else {
+            // Fallback to in-memory cache if columns don't exist yet
+            attendee.checkedIn = attendanceData.has(index + 1) ? true : false;
+            attendee.checkInTime = attendanceData.has(index + 1) ? attendanceData.get(index + 1) : null;
+        }
+        
+        // Map each column to a property
+        headers.forEach((header, colIndex) => {
+            if (row[colIndex] !== undefined && row[colIndex] !== '') {
+                attendee[header.toLowerCase().replace(/\s+/g, '_')] = row[colIndex];
+            }
+        });
+        
+        return attendee;
+    });
+
+    return attendees;
 }
 
 // Health check endpoint to verify Google Sheets configuration

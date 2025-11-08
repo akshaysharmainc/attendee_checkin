@@ -262,7 +262,9 @@ class AttendeeCheckInApp {
                 this.displayResults(results);
             } catch (error) {
                 console.error('Search error:', error);
-                this.showError('Failed to search attendees');
+                this.showError(error.message || 'Failed to search attendees');
+                // Clear results on error to avoid showing stale/misleading data
+                this.showEmptyState();
             }
         }, 300);
     }
@@ -274,8 +276,13 @@ class AttendeeCheckInApp {
         const url = `/api/attendees/search?query=${encodeURIComponent(query)}&sheetId=${encodeURIComponent(this.sheetId)}&range=${encodeURIComponent(this.sheetRange)}`;
         const response = await fetch(url);
         if (!response.ok) {
-            const error = await response.json().catch(() => ({ error: 'Search failed' }));
-            throw new Error(error.error || 'Search failed');
+            const error = await response.json().catch(() => ({ error: 'Failed to search attendees' }));
+            const errorMsg = error.error || 'Failed to search attendees';
+            // Provide more specific error message for connection issues
+            if (errorMsg.includes('Failed to fetch') || errorMsg.includes('network')) {
+                throw new Error('Connection failed. Please check your internet connection and try again.');
+            }
+            throw new Error(errorMsg);
         }
         return await response.json();
     }
@@ -301,11 +308,14 @@ class AttendeeCheckInApp {
                 if (error.error && error.error.includes('Sheet ID is required')) {
                     this.showSheetConfigModal();
                 } else {
+                    const errorMsg = error.error || 'Failed to load attendees from Google Sheet';
+                    this.showError(errorMsg);
                     this.showEmptyState();
                 }
             }
         } catch (error) {
             console.error('Failed to load default results:', error);
+            this.showError('Failed to connect to Google Sheet. Please check your connection and try again.');
             this.showEmptyState();
         }
     }
@@ -641,9 +651,23 @@ class AttendeeCheckInApp {
                 })
             });
 
+            if (!response.ok) {
+                // Try to parse error response, but handle network errors gracefully
+                const error = await response.json().catch(() => ({ 
+                    error: 'Failed to connect to Google Sheet. Please check your connection and try again.' 
+                }));
+                checkbox.checked = !checkedIn;
+                const errorMsg = error.error || error.warning || 'Check-in failed';
+                this.showError(errorMsg);
+                if (error.warning) {
+                    console.warn('Check-in warning:', error.warning);
+                }
+                return;
+            }
+
             const result = await response.json();
             
-            if (!response.ok || !result.success) {
+            if (!result.success) {
                 // Revert checkbox state on error
                 checkbox.checked = !checkedIn;
                 const errorMsg = result.error || result.warning || 'Check-in failed';
@@ -668,7 +692,8 @@ class AttendeeCheckInApp {
             console.error('Check-in error:', error);
             // Revert checkbox state on error
             checkbox.checked = !checkedIn;
-            this.showError('Failed to update attendance: ' + error.message);
+            const errorMsg = error.message || 'Failed to connect to Google Sheet. Please check your connection and try again.';
+            this.showError('Failed to update attendance: ' + errorMsg);
         } finally {
             checkbox.disabled = false;
         }
@@ -715,8 +740,13 @@ class AttendeeCheckInApp {
             const currentQuery = this.searchInput.value.trim();
             if (currentQuery) {
                 // Refresh search results
-                const results = await this.searchAttendees(currentQuery);
-                this.displayResults(results);
+                try {
+                    const results = await this.searchAttendees(currentQuery);
+                    this.displayResults(results);
+                } catch (searchError) {
+                    // Error already shown by searchAttendees, just log
+                    console.error('Failed to refresh search results after sync:', searchError);
+                }
             } else {
                 // Refresh default results
                 await this.loadDefaultResults();
@@ -724,7 +754,8 @@ class AttendeeCheckInApp {
             
         } catch (error) {
             console.error('Sync error:', error);
-            this.showError('Failed to sync from Google Sheet');
+            const errorMsg = error.message || 'Failed to sync from Google Sheet';
+            this.showError(errorMsg);
         } finally {
             this.syncButton.classList.remove('syncing');
             this.syncButton.innerHTML = '<i class="fas fa-sync-alt"></i><span>Sync Sheet</span>';
@@ -762,9 +793,14 @@ class AttendeeCheckInApp {
                 const summary = await response.json();
                 // Update only the header count
                 this.checkedInCount.textContent = summary.totalCheckedIn;
+            } else {
+                // Don't show error for summary failures (it's less critical)
+                // Just log it silently to avoid spamming the user
+                console.debug('Failed to load attendance summary:', response.status);
             }
         } catch (error) {
-            console.error('Failed to load attendance summary:', error);
+            // Don't show error for summary failures (it's less critical)
+            console.debug('Failed to load attendance summary:', error);
         }
     }
 
