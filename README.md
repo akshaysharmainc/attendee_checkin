@@ -75,6 +75,18 @@ Visit `http://localhost:3000`
 
 **Note**: If Google Sheets is not configured, the app will run in demo mode with sample data. Check `/api/health` to verify your configuration status.
 
+## Deployment
+
+To deploy this app for your team, see **[DEPLOYMENT.md](./DEPLOYMENT.md)** for detailed step-by-step instructions.
+
+**Quick Start with Railway** (recommended - easiest):
+1. Sign up at [railway.app](https://railway.app)
+2. Connect your GitHub repository
+3. Set environment variables in Railway dashboard
+4. Deploy automatically - your app will be live in minutes!
+
+**Other options**: Render, Heroku, Docker, VPS - all covered in [DEPLOYMENT.md](./DEPLOYMENT.md)
+
 ## Usage
 
 1. **Search**: Type a few letters to find attendees by name or company
@@ -90,33 +102,6 @@ Each attendee card shows:
 The app automatically detects columns containing "color"/"colour" or "spoc"/"host" in their names and displays them in the top section.
 
 The app automatically creates "Check-In Status" and "Check-In Time" columns in your Google Sheet.
-
-## Deployment
-
-### Railway (Recommended)
-
-1. Go to [railway.app](https://railway.app)
-2. Deploy from GitHub repo
-3. Set environment variables:
-   - `GOOGLE_SHEET_ID` - Your sheet ID
-   - `GOOGLE_APPLICATION_CREDENTIALS` - Full JSON content from credentials.json
-   - `GOOGLE_SHEET_RANGE` - Sheet1!A:Z
-   - `NODE_ENV` - production
-
-### Render
-
-1. Go to [render.com](https://render.com)
-2. Create new Web Service from GitHub
-3. Build Command: `npm install && npm run build`
-4. Start Command: `npm start`
-5. Set the same environment variables as above
-
-### Docker
-
-```bash
-docker build -t attendee-checkin .
-docker run -p 3000:3000 -e GOOGLE_SHEET_ID=... attendee-checkin
-```
 
 ## API Endpoints
 
