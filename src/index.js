@@ -1,9 +1,13 @@
 import './styles.css';
 
+// Constants
+const DEFAULT_SHEET_RANGE = 'Sheet1!A:Z';
+
 class AttendeeCheckInApp {
     constructor() {
         this.searchInput = document.getElementById('searchInput');
         this.searchResults = document.getElementById('searchResults');
+        this.clearSearchBtn = document.getElementById('clearSearchBtn');
         this.checkedInCount = document.getElementById('checkedInCount');
         this.syncButton = document.getElementById('syncButton');
         this.showDetailsToggle = document.getElementById('showDetailsToggle');
@@ -21,7 +25,7 @@ class AttendeeCheckInApp {
         
         // Sheet configuration
         this.sheetId = null;
-        this.sheetRange = 'Sheet1!A:Z';
+        this.sheetRange = DEFAULT_SHEET_RANGE;
         
         // Load show details preference from localStorage (default: true)
         this.showDetails = localStorage.getItem('showDetails') !== 'false';
@@ -64,7 +68,7 @@ class AttendeeCheckInApp {
         
         if (sheetIdFromUrl) {
             this.sheetId = sheetIdFromUrl;
-            this.sheetRange = rangeFromUrl || 'Sheet1!A:Z';
+            this.sheetRange = rangeFromUrl || DEFAULT_SHEET_RANGE;
             // Save to localStorage for persistence
             localStorage.setItem('googleSheetId', this.sheetId);
             localStorage.setItem('googleSheetRange', this.sheetRange);
@@ -77,7 +81,7 @@ class AttendeeCheckInApp {
         
         if (storedSheetId) {
             this.sheetId = storedSheetId;
-            this.sheetRange = storedRange || 'Sheet1!A:Z';
+            this.sheetRange = storedRange || DEFAULT_SHEET_RANGE;
             return;
         }
         
@@ -107,12 +111,12 @@ class AttendeeCheckInApp {
     async validateAndSetSheet(sheetId, range) {
         try {
             // Validate sheet access
-            const response = await fetch(`/api/sheets/validate?sheetId=${encodeURIComponent(sheetId)}&range=${encodeURIComponent(range || 'Sheet1!A:Z')}`);
+            const response = await fetch(`/api/sheets/validate?sheetId=${encodeURIComponent(sheetId)}&range=${encodeURIComponent(range || DEFAULT_SHEET_RANGE)}`);
             const data = await response.json();
             
             if (data.valid) {
                 this.sheetId = sheetId;
-                this.sheetRange = range || 'Sheet1!A:Z';
+                this.sheetRange = range || DEFAULT_SHEET_RANGE;
                 
                 // Save to localStorage
                 localStorage.setItem('googleSheetId', this.sheetId);
@@ -121,7 +125,7 @@ class AttendeeCheckInApp {
                 // Update URL without reload (optional - for sharing)
                 const url = new URL(window.location);
                 url.searchParams.set('sheetId', this.sheetId);
-                if (this.sheetRange !== 'Sheet1!A:Z') {
+                if (this.sheetRange !== DEFAULT_SHEET_RANGE) {
                     url.searchParams.set('range', this.sheetRange);
                 }
                 window.history.replaceState({}, '', url);
@@ -167,6 +171,7 @@ class AttendeeCheckInApp {
     bindEvents() {
         this.searchInput.addEventListener('input', (e) => {
             this.handleSearch(e.target.value);
+            this.updateClearButton(e.target.value);
         });
 
         this.searchInput.addEventListener('focus', () => {
@@ -176,6 +181,15 @@ class AttendeeCheckInApp {
         this.searchInput.addEventListener('blur', () => {
             this.searchInput.parentElement.classList.remove('focused');
         });
+
+        if (this.clearSearchBtn) {
+            this.clearSearchBtn.addEventListener('click', () => {
+                this.searchInput.value = '';
+                this.searchInput.focus();
+                this.handleSearch('');
+                this.updateClearButton('');
+            });
+        }
 
         this.syncButton.addEventListener('click', () => {
             this.syncFromSheet();
@@ -194,7 +208,7 @@ class AttendeeCheckInApp {
             this.sheetConfigForm.addEventListener('submit', async (e) => {
                 e.preventDefault();
                 const sheetId = this.sheetIdInput.value.trim();
-                const range = this.rangeInput.value.trim() || 'Sheet1!A:Z';
+                const range = this.rangeInput.value.trim() || DEFAULT_SHEET_RANGE;
                 
                 if (!sheetId) {
                     this.showConfigError('Sheet ID is required');
@@ -220,6 +234,12 @@ class AttendeeCheckInApp {
             this.configGearBtn.addEventListener('click', () => {
                 this.showSheetConfigModal();
             });
+        }
+    }
+
+    updateClearButton(value) {
+        if (this.clearSearchBtn) {
+            this.clearSearchBtn.style.display = value.trim().length > 0 ? 'flex' : 'none';
         }
     }
 
