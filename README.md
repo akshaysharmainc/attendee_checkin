@@ -52,6 +52,11 @@ PORT=3000
 
 Place your downloaded service account JSON file as `credentials.json` in the project root.
 
+**⚠️ Security Note**: 
+- Never commit `.env` or `credentials.json` to version control
+- Each user must create their own Google Cloud project and service account
+- The `.gitignore` file is already configured to exclude these files
+
 ### 4. Run the App
 
 **Development:**
@@ -67,6 +72,8 @@ npm start          # Start server
 ```
 
 Visit `http://localhost:3000`
+
+**Note**: If Google Sheets is not configured, the app will run in demo mode with sample data. Check `/api/health` to verify your configuration status.
 
 ## Usage
 

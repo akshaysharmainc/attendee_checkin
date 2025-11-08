@@ -76,27 +76,109 @@ const DEMO_ATTENDEES = [
     }
 ];
 
+// Configuration validation
+function validateConfig() {
+    const errors = [];
+    const warnings = [];
+    
+    // Check for Sheet ID
+    if (!process.env.GOOGLE_SHEET_ID) {
+        warnings.push('GOOGLE_SHEET_ID not set - will run in demo mode');
+    } else if (process.env.GOOGLE_SHEET_ID === 'your_google_sheet_id_here' || 
+               process.env.GOOGLE_SHEET_ID === 'your_sheet_id_here') {
+        warnings.push('GOOGLE_SHEET_ID appears to be a placeholder - will run in demo mode');
+    }
+    
+    // Check for credentials
+    if (!process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+        warnings.push('GOOGLE_APPLICATION_CREDENTIALS not set - will run in demo mode');
+    } else {
+        // Validate credentials format
+        const creds = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+        if (creds.startsWith('{')) {
+            // JSON string - validate it's parseable
+            try {
+                const parsed = JSON.parse(creds);
+                if (!parsed.type || !parsed.project_id || !parsed.private_key) {
+                    errors.push('GOOGLE_APPLICATION_CREDENTIALS JSON is missing required fields (type, project_id, private_key)');
+                }
+            } catch (e) {
+                errors.push('GOOGLE_APPLICATION_CREDENTIALS is not valid JSON: ' + e.message);
+            }
+        } else {
+            // File path - check if file exists
+            const fs = require('fs');
+            const path = require('path');
+            const credPath = path.resolve(creds);
+            if (!fs.existsSync(credPath)) {
+                errors.push(`GOOGLE_APPLICATION_CREDENTIALS file not found: ${credPath}`);
+            }
+        }
+    }
+    
+    // Check for range (optional, has default)
+    if (!process.env.GOOGLE_SHEET_RANGE) {
+        // This is fine, we have a default
+    }
+    
+    return { errors, warnings };
+}
+
+// Validate configuration on startup
+const configValidation = validateConfig();
+if (configValidation.errors.length > 0) {
+    console.error('\n❌ Configuration Errors:');
+    configValidation.errors.forEach(err => console.error(`   - ${err}`));
+    console.error('\n⚠️  Server will start but Google Sheets integration will be disabled.\n');
+}
+if (configValidation.warnings.length > 0) {
+    console.warn('\n⚠️  Configuration Warnings:');
+    configValidation.warnings.forEach(warn => console.warn(`   - ${warn}`));
+    console.warn('');
+}
+
 // Handle credentials from environment variable (production) or file (development)
 let credentials;
+let credentialsError = null;
 if (process.env.GOOGLE_APPLICATION_CREDENTIALS && process.env.GOOGLE_APPLICATION_CREDENTIALS.startsWith('{')) {
     // Production: Parse JSON from environment variable
     try {
         credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS);
         console.log('✅ Using production credentials from environment variable');
     } catch (error) {
-        console.log('⚠️  Failed to parse credentials from environment variable');
+        credentialsError = `Failed to parse credentials from environment variable: ${error.message}`;
+        console.error(`❌ ${credentialsError}`);
+        credentials = null;
+    }
+} else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    // Development: Use credentials file
+    const fs = require('fs');
+    const path = require('path');
+    const credPath = path.resolve(process.env.GOOGLE_APPLICATION_CREDENTIALS);
+    if (fs.existsSync(credPath)) {
+        credentials = credPath;
+        console.log(`✅ Using development credentials from file: ${credPath}`);
+    } else {
+        credentialsError = `Credentials file not found: ${credPath}`;
+        console.error(`❌ ${credentialsError}`);
         credentials = null;
     }
 } else {
-    // Development: Use credentials file
-    credentials = process.env.GOOGLE_APPLICATION_CREDENTIALS || './credentials.json';
-    console.log('✅ Using development credentials from file');
+    credentials = './credentials.json'; // Default fallback
+    const fs = require('fs');
+    if (!fs.existsSync(credentials)) {
+        credentialsError = 'No credentials configured and default file not found';
+        credentials = null;
+    }
 }
 
 // Initialize Google Auth (only if credentials are available)
 let auth = null;
 let sheets = null;
-if (SHEET_ID && credentials) {
+let authError = null;
+let isConfigured = false;
+
+if (SHEET_ID && credentials && !credentialsError) {
     try {
         if (typeof credentials === 'string') {
             // File path
@@ -112,13 +194,23 @@ if (SHEET_ID && credentials) {
             });
         }
         sheets = google.sheets({ version: 'v4' });
+        isConfigured = true;
         console.log('✅ Google Sheets integration enabled with write access');
+        console.log(`   Sheet ID: ${SHEET_ID}`);
+        console.log(`   Range: ${RANGE}`);
     } catch (error) {
-        console.log('⚠️  Google Sheets credentials not found, using demo mode');
-        console.error('Auth error:', error.message);
+        authError = `Failed to initialize Google Auth: ${error.message}`;
+        console.error(`❌ ${authError}`);
+        console.log('⚠️  Using demo mode due to authentication error');
     }
 } else {
-    console.log('⚠️  Google Sheets not configured, using demo mode');
+    const reasons = [];
+    if (!SHEET_ID) reasons.push('GOOGLE_SHEET_ID not set');
+    if (!credentials || credentialsError) {
+        reasons.push(credentialsError || 'GOOGLE_APPLICATION_CREDENTIALS not configured');
+    }
+    console.log(`⚠️  Google Sheets not configured: ${reasons.join(', ')}`);
+    console.log('📱 Running in demo mode with sample data');
 }
 
 // Store attendance data in memory (in production, use a database)
@@ -427,7 +519,75 @@ async function getAttendees() {
     }
 }
 
-// Get attendees from Google Sheets or demo data
+// Health check endpoint to verify Google Sheets configuration
+app.get('/api/health', (req, res) => {
+    const health = {
+        status: 'ok',
+        googleSheetsConfigured: isConfigured,
+        demoMode: !isConfigured,
+        timestamp: new Date().toISOString(),
+        configuration: {
+            sheetId: SHEET_ID ? 'configured' : 'not set',
+            range: RANGE,
+            credentials: credentials ? 'configured' : 'not set'
+        }
+    };
+    
+    if (isConfigured) {
+        health.message = 'Google Sheets integration active';
+        health.details = {
+            sheetId: SHEET_ID,
+            range: RANGE
+        };
+    } else {
+        health.message = 'Running in demo mode';
+        health.details = {
+            reason: 'Google Sheets not configured',
+            errors: []
+        };
+        
+        if (!SHEET_ID) {
+            health.details.errors.push({
+                field: 'GOOGLE_SHEET_ID',
+                issue: 'Not set or invalid',
+                fix: 'Set GOOGLE_SHEET_ID environment variable with your Google Sheet ID'
+            });
+        }
+        
+        if (credentialsError) {
+            health.details.errors.push({
+                field: 'GOOGLE_APPLICATION_CREDENTIALS',
+                issue: credentialsError,
+                fix: 'Set GOOGLE_APPLICATION_CREDENTIALS to a valid file path or JSON string'
+            });
+        } else if (!credentials) {
+            health.details.errors.push({
+                field: 'GOOGLE_APPLICATION_CREDENTIALS',
+                issue: 'Not configured',
+                fix: 'Set GOOGLE_APPLICATION_CREDENTIALS environment variable or place credentials.json in project root'
+            });
+        }
+        
+        if (authError) {
+            health.details.errors.push({
+                field: 'Authentication',
+                issue: authError,
+                fix: 'Check that your credentials are valid and have the correct permissions'
+            });
+        }
+        
+        health.details.setupInstructions = [
+            '1. Create a Google Cloud project and enable Sheets API',
+            '2. Create a service account and download JSON key',
+            '3. Share your Google Sheet with the service account email',
+            '4. Set GOOGLE_SHEET_ID and GOOGLE_APPLICATION_CREDENTIALS environment variables',
+            '5. Restart the server'
+        ];
+    }
+    
+    res.json(health);
+});
+
 app.get('/api/attendees', async (req, res) => {
     try {
         const attendees = await getAttendees();
@@ -581,7 +741,16 @@ app.get('/api/attendance/summary', async (req, res) => {
 app.post('/api/attendance/sync-from-sheet', async (req, res) => {
     try {
         if (!auth || !SHEET_ID) {
-            return res.status(400).json({ error: 'Google Sheets not configured' });
+            return res.status(400).json({ 
+                error: 'Google Sheets not configured',
+                message: 'Cannot sync: Google Sheets integration is not set up',
+                details: {
+                    sheetIdConfigured: !!SHEET_ID,
+                    credentialsConfigured: !!credentials && !credentialsError,
+                    authInitialized: !!auth
+                },
+                fix: 'Please configure GOOGLE_SHEET_ID and GOOGLE_APPLICATION_CREDENTIALS. Check /api/health for details.'
+            });
         }
 
         const authClient = await auth.getClient();
@@ -654,13 +823,41 @@ app.post('/api/attendance/sync-from-sheet', async (req, res) => {
 });
 
 app.listen(PORT, () => {
+    console.log('\n' + '='.repeat(60));
     console.log(`🚀 Server running on port ${PORT}`);
-    if (auth && SHEET_ID) {
-        console.log('✅ Connected to Google Sheets with write access');
-        console.log('📝 Will automatically update sheet with check-in status');
+    console.log('='.repeat(60));
+    
+    if (isConfigured) {
+        console.log('✅ Google Sheets Integration: ACTIVE');
+        console.log(`   Sheet ID: ${SHEET_ID}`);
+        console.log(`   Range: ${RANGE}`);
+        console.log('   Write access: Enabled');
+        console.log('   📝 Check-in status will be saved to Google Sheets');
     } else {
-        console.log('📱 Demo mode active - using sample data');
-        console.log('📖 See GOOGLE_SHEETS_SETUP.md to connect to your Google Sheet');
+        console.log('📱 Google Sheets Integration: DEMO MODE');
+        console.log('   Using sample data for testing');
+        console.log('\n   To enable Google Sheets:');
+        console.log('   1. Set GOOGLE_SHEET_ID environment variable');
+        console.log('   2. Set GOOGLE_APPLICATION_CREDENTIALS (file path or JSON)');
+        console.log('   3. Restart the server');
+        console.log('\n   Check /api/health for detailed configuration status');
     }
+    
+    if (configValidation.errors.length > 0 || credentialsError || authError) {
+        console.log('\n   ⚠️  Configuration Issues Detected:');
+        if (configValidation.errors.length > 0) {
+            configValidation.errors.forEach(err => console.log(`      - ${err}`));
+        }
+        if (credentialsError) {
+            console.log(`      - ${credentialsError}`);
+        }
+        if (authError) {
+            console.log(`      - ${authError}`);
+        }
+    }
+    
+    console.log('='.repeat(60));
     console.log(`🌐 Open http://localhost:${PORT} in your browser`);
+    console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
+    console.log('='.repeat(60) + '\n');
 }); 
