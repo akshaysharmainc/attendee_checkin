@@ -635,6 +635,19 @@ class AttendeeCheckInApp {
         const checkedIn = checkbox.checked;
         const row = checkbox.closest('.attendee-row');
 
+        // OPTIMISTIC UI UPDATE: Apply visual changes immediately
+        row.classList.toggle('checked-in', checkedIn);
+        if (checkedIn) {
+            this.showCheckInSuccess(attendeeId);
+        } else {
+            this.showCheckOutSuccess(attendeeId);
+        }
+
+        // OPTIMISTIC COUNT UPDATE: Update count immediately
+        const currentCount = parseInt(this.checkedInCount.textContent) || 0;
+        const newCount = checkedIn ? currentCount + 1 : Math.max(0, currentCount - 1);
+        this.checkedInCount.textContent = newCount;
+
         // Disable checkbox during request
         checkbox.disabled = true;
 
@@ -656,7 +669,12 @@ class AttendeeCheckInApp {
                 const error = await response.json().catch(() => ({ 
                     error: 'Failed to connect to Google Sheet. Please check your connection and try again.' 
                 }));
+                
+                // ROLLBACK: Revert optimistic updates on error
                 checkbox.checked = !checkedIn;
+                row.classList.toggle('checked-in', !checkedIn);
+                this.checkedInCount.textContent = currentCount; // Revert count
+                
                 const errorMsg = error.error || error.warning || 'Check-in failed';
                 this.showError(errorMsg);
                 if (error.warning) {
@@ -668,8 +686,11 @@ class AttendeeCheckInApp {
             const result = await response.json();
             
             if (!result.success) {
-                // Revert checkbox state on error
+                // ROLLBACK: Revert optimistic updates on error
                 checkbox.checked = !checkedIn;
+                row.classList.toggle('checked-in', !checkedIn);
+                this.checkedInCount.textContent = currentCount; // Revert count
+                
                 const errorMsg = result.error || result.warning || 'Check-in failed';
                 this.showError(errorMsg);
                 if (result.warning) {
@@ -678,20 +699,19 @@ class AttendeeCheckInApp {
                 return;
             }
             
-            row.classList.toggle('checked-in', checkedIn);
-            if (checkedIn) {
-                this.showCheckInSuccess(attendeeId);
-            } else {
-                this.showCheckOutSuccess(attendeeId);
+            // SYNC: Update count with accurate value from server
+            if (result.totalCheckedIn !== undefined) {
+                this.checkedInCount.textContent = result.totalCheckedIn;
             }
-
-            // Update attendance summary
-            this.loadAttendanceSummary();
             
         } catch (error) {
             console.error('Check-in error:', error);
-            // Revert checkbox state on error
+            
+            // ROLLBACK: Revert optimistic updates on error
             checkbox.checked = !checkedIn;
+            row.classList.toggle('checked-in', !checkedIn);
+            this.checkedInCount.textContent = currentCount; // Revert count
+            
             const errorMsg = error.message || 'Failed to connect to Google Sheet. Please check your connection and try again.';
             this.showError('Failed to update attendance: ' + errorMsg);
         } finally {

@@ -586,22 +586,30 @@ async function getAttendees(sheetId, range) {
         // Read check-in status directly from Google Sheet (source of truth)
         if (checkInStatusCol !== -1 && row[checkInStatusCol] !== undefined && row[checkInStatusCol] !== '') {
             const status = row[checkInStatusCol];
-            const isCheckedIn = (
-                status === true ||
-                status === 1 ||
-                (typeof status === 'string' && (
-                    status.toLowerCase().includes('checked') ||
-                    status.toLowerCase().includes('yes') ||
-                    status.toLowerCase() === 'true'
-                ))
-            );
             
-            attendee.checkedIn = isCheckedIn;
-            attendee.checkInTime = (isCheckedIn && checkInTimeCol !== -1 && row[checkInTimeCol]) 
-                ? row[checkInTimeCol] 
-                : null;
+            // Handle boolean false explicitly (Google Sheets may return boolean false)
+            if (status === false) {
+                attendee.checkedIn = false;
+                attendee.checkInTime = null;
+            } else {
+                // Check for positive values
+                const isCheckedIn = (
+                    status === true ||
+                    status === 1 ||
+                    (typeof status === 'string' && (
+                        status.toLowerCase().includes('checked') ||
+                        status.toLowerCase().includes('yes') ||
+                        status.toLowerCase() === 'true'
+                    ))
+                );
+                
+                attendee.checkedIn = isCheckedIn;
+                attendee.checkInTime = (isCheckedIn && checkInTimeCol !== -1 && row[checkInTimeCol]) 
+                    ? row[checkInTimeCol] 
+                    : null;
+            }
         } else if (checkInStatusCol !== -1 && row[checkInStatusCol] === false) {
-            // Handle explicit false boolean value
+            // Handle explicit false boolean value (when cell is empty but column exists)
             attendee.checkedIn = false;
             attendee.checkInTime = null;
         } else {
@@ -838,10 +846,22 @@ app.post('/api/attendees/:id/checkin', async (req, res) => {
             attendanceData.delete(attendeeId);
         }
         
+        // Calculate updated count from Google Sheets (source of truth)
+        let totalCheckedIn = attendanceData.size; // Fallback to cache
+        try {
+            const attendees = await getAttendees(targetSheetId, targetRange);
+            const checkedInAttendees = attendees.filter(a => a.checkedIn);
+            totalCheckedIn = checkedInAttendees.length;
+        } catch (error) {
+            // If we can't fetch from sheet, use cache count
+            console.warn('Could not fetch updated count from sheet, using cache:', error.message);
+        }
+        
         res.json({ 
             success: true, 
             checkedIn: checkedIn,
-            checkInTime: checkInTime
+            checkInTime: checkInTime,
+            totalCheckedIn: totalCheckedIn
         });
     } catch (error) {
         console.error('Error in check-in endpoint:', error);
@@ -964,7 +984,10 @@ app.post('/api/attendance/sync-from-sheet', async (req, res) => {
                 const time = checkInTimeCol !== -1 ? row[checkInTimeCol] : null;
                 
                 // Accept 'checked', 'yes', boolean true, string 'true' (case-insensitive), and 1 as checked-in
-                if (
+                // Explicitly handle boolean false
+                if (status === false) {
+                    // Explicitly not checked in
+                } else if (
                     status &&
                     (
                         (typeof status === 'string' && (
