@@ -302,14 +302,14 @@ async function ensureCheckInColumns(authClient, sheetId, range) {
         const headers = rows[0];
         
         let checkInStatusCol = headers.findIndex(h => 
-            h.toLowerCase().includes('check-in') || 
-            h.toLowerCase().includes('checked') || 
-            h.toLowerCase().includes('attendance')
+            h && (h.trim().toLowerCase().includes('check-in') || 
+                  h.trim().toLowerCase().includes('checked') || 
+                  h.trim().toLowerCase().includes('attendance'))
         );
         
         let checkInTimeCol = headers.findIndex(h => 
-            h.toLowerCase().includes('time') || 
-            h.toLowerCase().includes('timestamp')
+            h && (h.trim().toLowerCase().includes('time') || 
+                  h.trim().toLowerCase().includes('timestamp'))
         );
 
         // Helper function to find the first empty column (no header, no data)
@@ -367,9 +367,9 @@ async function ensureCheckInColumns(authClient, sheetId, range) {
                 });
                 const updatedHeaders = updatedResponse.data.values[0];
                 checkInStatusCol = updatedHeaders.findIndex(h => 
-                    h.toLowerCase().includes('check-in') || 
-                    h.toLowerCase().includes('checked') || 
-                    h.toLowerCase().includes('attendance')
+                    h && (h.trim().toLowerCase().includes('check-in') || 
+                          h.trim().toLowerCase().includes('checked') || 
+                          h.trim().toLowerCase().includes('attendance'))
                 );
             } catch (error) {
                 // Column might have been created by another request - try to find it
@@ -380,9 +380,9 @@ async function ensureCheckInColumns(authClient, sheetId, range) {
                 });
                 const updatedHeaders = updatedResponse.data.values[0];
                 checkInStatusCol = updatedHeaders.findIndex(h => 
-                    h.toLowerCase().includes('check-in') || 
-                    h.toLowerCase().includes('checked') || 
-                    h.toLowerCase().includes('attendance')
+                    h && (h.trim().toLowerCase().includes('check-in') || 
+                          h.trim().toLowerCase().includes('checked') || 
+                          h.trim().toLowerCase().includes('attendance'))
                 );
             }
         }
@@ -415,8 +415,8 @@ async function ensureCheckInColumns(authClient, sheetId, range) {
                 });
                 const updatedHeaders = updatedResponse.data.values[0];
                 checkInTimeCol = updatedHeaders.findIndex(h => 
-                    h.toLowerCase().includes('time') || 
-                    h.toLowerCase().includes('timestamp')
+                    h && (h.trim().toLowerCase().includes('time') || 
+                          h.trim().toLowerCase().includes('timestamp'))
                 );
             } catch (error) {
                 // Column might have been created by another request - try to find it
@@ -427,8 +427,8 @@ async function ensureCheckInColumns(authClient, sheetId, range) {
                 });
                 const updatedHeaders = updatedResponse.data.values[0];
                 checkInTimeCol = updatedHeaders.findIndex(h => 
-                    h.toLowerCase().includes('time') || 
-                    h.toLowerCase().includes('timestamp')
+                    h && (h.trim().toLowerCase().includes('time') || 
+                          h.trim().toLowerCase().includes('timestamp'))
                 );
             }
         }
@@ -571,14 +571,14 @@ async function getAttendees(sheetId, range) {
     
     // Find check-in status and time columns
     const checkInStatusCol = headers.findIndex(h => 
-        h.toLowerCase().includes('check-in') || 
-        h.toLowerCase().includes('checked') || 
-        h.toLowerCase().includes('attendance')
+        h && (h.trim().toLowerCase().includes('check-in') || 
+              h.trim().toLowerCase().includes('checked') || 
+              h.trim().toLowerCase().includes('attendance'))
     );
     
     const checkInTimeCol = headers.findIndex(h => 
-        h.toLowerCase().includes('time') || 
-        h.toLowerCase().includes('timestamp')
+        h && (h.trim().toLowerCase().includes('time') || 
+              h.trim().toLowerCase().includes('timestamp'))
     );
 
     const attendees = rows.slice(1).map((row, index) => {
@@ -624,7 +624,11 @@ async function getAttendees(sheetId, range) {
         // Map each column to a property
         headers.forEach((header, colIndex) => {
             if (row[colIndex] !== undefined && row[colIndex] !== '') {
-                attendee[header.toLowerCase().replace(/\s+/g, '_')] = row[colIndex];
+                // Trim whitespace from header before normalizing
+                const normalizedHeader = header ? header.trim().toLowerCase().replace(/\s+/g, '_') : '';
+                if (normalizedHeader) {
+                    attendee[normalizedHeader] = row[colIndex];
+                }
             }
         });
         
@@ -967,14 +971,14 @@ app.post('/api/attendance/sync-from-sheet', async (req, res) => {
         
         // Find check-in status and time columns
         const checkInStatusCol = headers.findIndex(h => 
-            h.toLowerCase().includes('check-in') || 
-            h.toLowerCase().includes('checked') || 
-            h.toLowerCase().includes('attendance')
+            h && (h.trim().toLowerCase().includes('check-in') || 
+                  h.trim().toLowerCase().includes('checked') || 
+                  h.trim().toLowerCase().includes('attendance'))
         );
         
         const checkInTimeCol = headers.findIndex(h => 
-            h.toLowerCase().includes('time') || 
-            h.toLowerCase().includes('timestamp')
+            h && (h.trim().toLowerCase().includes('time') || 
+                  h.trim().toLowerCase().includes('timestamp'))
         );
 
         if (checkInStatusCol !== -1) {
