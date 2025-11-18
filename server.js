@@ -17,6 +17,8 @@ const SCOPES = ['https://www.googleapis.com/auth/spreadsheets']; // Updated to i
 // Legacy: Support environment variables for backward compatibility
 const DEFAULT_SHEET_ID = process.env.GOOGLE_SHEET_ID;
 const DEFAULT_RANGE = process.env.GOOGLE_SHEET_RANGE || 'Sheet1!A:Z';
+// Check-in time logging configuration
+const DISABLE_CHECKIN_TIME_LOGGING = process.env.DISABLE_CHECKIN_TIME_LOGGING === 'true' || process.env.DISABLE_CHECKIN_TIME_LOGGING === '1';
 
 // Demo data for testing when Google Sheets is not configured
 const DEMO_ATTENDEES = [
@@ -385,7 +387,8 @@ async function ensureCheckInColumns(authClient, sheetId, range) {
             }
         }
 
-        if (checkInTimeCol === -1) {
+        // Only create check-in time column if time logging is enabled
+        if (checkInTimeCol === -1 && !DISABLE_CHECKIN_TIME_LOGGING) {
             const sheetName = range.split('!')[0];
             // Find empty column starting after the status column (if it exists)
             const startFrom = checkInStatusCol !== -1 ? checkInStatusCol + 1 : 0;
@@ -496,8 +499,8 @@ async function updateSheetCheckInStatus(rowIndex, checkedIn, checkInTime, sheetI
             });
         });
 
-        // Update check-in time with retry (if column exists)
-        if (timeRange && checkInTimeCol !== -1) {
+        // Update check-in time with retry (if column exists and time logging is enabled)
+        if (timeRange && checkInTimeCol !== -1 && !DISABLE_CHECKIN_TIME_LOGGING) {
             await retryOperation(async () => {
                 await sheets.spreadsheets.values.update({
                     auth: authClient,

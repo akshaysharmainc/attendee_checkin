@@ -78,6 +78,7 @@ Edit `.env`:
 GOOGLE_SHEET_ID=your_actual_sheet_id_here
 GOOGLE_APPLICATION_CREDENTIALS=./credentials.json
 GOOGLE_SHEET_RANGE=Sheet1!A:Z
+DISABLE_CHECKIN_TIME_LOGGING=false
 PORT=3000
 ```
 
@@ -87,8 +88,12 @@ PORT=3000
   - Format: `SheetName!A:Z` (e.g., `Sheet1!A:Z`, `Attendees!A:AA`)
   - Use `A:Z` to read columns A through Z
   - Use `A:AA` to read columns A through AA (27 columns)
-  - The app will automatically create "Check-In Status" and "Check-In Time" columns if they don't exist
+  - The app will automatically create "Check-In Status" column (and "Check-In Time" column if time logging is enabled) if they don't exist
 - `GOOGLE_APPLICATION_CREDENTIALS`: Path to your service account JSON file
+- `DISABLE_CHECKIN_TIME_LOGGING`: Set to `true` or `1` to disable check-in time logging (default: `false`)
+  - When disabled, only the check-in status (true/false) will be written to the sheet
+  - The "Check-In Time" column will not be created or updated
+  - Useful if you only need to track attendance status without timestamps
 
 ##### Option B: Frontend Configuration (Recommended for Multiple Teams/Sheets)
 
@@ -257,7 +262,8 @@ The app uses **flexible, case-insensitive matching**:
 
 The app automatically:
 - **Detects** columns by flexible name matching (case-insensitive, partial matches)
-- **Creates** "Check-In Status" and "Check-In Time" columns if they don't exist
+- **Creates** "Check-In Status" column if it doesn't exist
+- **Creates** "Check-In Time" column if it doesn't exist and time logging is enabled (see `DISABLE_CHECKIN_TIME_LOGGING` configuration)
 - **Places** new columns in empty columns to avoid overwriting existing data
 - **Reads** check-in status directly from Google Sheet (source of truth)
 
