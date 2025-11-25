@@ -26,6 +26,7 @@ class AttendeeCheckInApp {
         // Sheet configuration
         this.sheetId = null;
         this.sheetRange = DEFAULT_SHEET_RANGE;
+        this.webhookUrl = null;
         
         // Load show details preference from localStorage (default: true)
         this.showDetails = localStorage.getItem('showDetails') !== 'false';
@@ -65,6 +66,7 @@ class AttendeeCheckInApp {
         const urlParams = new URLSearchParams(window.location.search);
         const sheetIdFromUrl = urlParams.get('sheetId');
         const rangeFromUrl = urlParams.get('range');
+        const webhookUrlFromUrl = urlParams.get('webhookUrl');
         
         if (sheetIdFromUrl) {
             this.sheetId = sheetIdFromUrl;
@@ -72,21 +74,34 @@ class AttendeeCheckInApp {
             // Save to localStorage for persistence
             localStorage.setItem('googleSheetId', this.sheetId);
             localStorage.setItem('googleSheetRange', this.sheetRange);
-            return;
         }
         
-        // Priority 2: Check localStorage
-        const storedSheetId = localStorage.getItem('googleSheetId');
-        const storedRange = localStorage.getItem('googleSheetRange');
+        // Load webhook URL from URL parameter or localStorage
+        if (webhookUrlFromUrl) {
+            this.webhookUrl = webhookUrlFromUrl;
+            localStorage.setItem('appsScriptWebhookUrl', this.webhookUrl);
+        } else {
+            const storedWebhookUrl = localStorage.getItem('appsScriptWebhookUrl');
+            if (storedWebhookUrl) {
+                this.webhookUrl = storedWebhookUrl;
+            }
+        }
         
-        if (storedSheetId) {
-            this.sheetId = storedSheetId;
-            this.sheetRange = storedRange || DEFAULT_SHEET_RANGE;
-            return;
+        // Priority 2: Check localStorage for sheet config
+        if (!this.sheetId) {
+            const storedSheetId = localStorage.getItem('googleSheetId');
+            const storedRange = localStorage.getItem('googleSheetRange');
+            
+            if (storedSheetId) {
+                this.sheetId = storedSheetId;
+                this.sheetRange = storedRange || DEFAULT_SHEET_RANGE;
+            }
         }
         
         // Priority 3: No configuration found - will show modal
-        this.sheetId = null;
+        if (!this.sheetId) {
+            this.sheetId = null;
+        }
     }
     
     showSheetConfigModal() {
@@ -660,7 +675,8 @@ class AttendeeCheckInApp {
                 body: JSON.stringify({ 
                     checkedIn,
                     sheetId: this.sheetId,
-                    range: this.sheetRange
+                    range: this.sheetRange,
+                    webhookUrl: this.webhookUrl
                 })
             });
 

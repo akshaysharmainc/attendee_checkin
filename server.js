@@ -373,13 +373,15 @@ async function callAppsScriptFunction(scriptId, functionName, parameters = []) {
 }
 
 // Helper to invoke Google Apps Script web app endpoints (HTTP POST)
-async function notifyAppsScriptWebhook(payload) {
-    if (!APPS_SCRIPT_WEBHOOK_URL) {
+async function notifyAppsScriptWebhook(payload, webhookUrl = null) {
+    const targetWebhookUrl = webhookUrl || APPS_SCRIPT_WEBHOOK_URL;
+    
+    if (!targetWebhookUrl) {
         return { success: false, skipped: true, reason: 'Webhook URL not configured' };
     }
 
     try {
-        const response = await fetch(APPS_SCRIPT_WEBHOOK_URL, {
+        const response = await fetch(targetWebhookUrl, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -1030,11 +1032,12 @@ app.get('/api/attendees/search', async (req, res) => {
 // Check in/out attendee
 app.post('/api/attendees/:id/checkin', async (req, res) => {
     const { id } = req.params;
-    const { checkedIn, sheetId, range } = req.body;
+    const { checkedIn, sheetId, range, webhookUrl } = req.body;
     const attendeeId = parseInt(id);
     
     const targetSheetId = sheetId || DEFAULT_SHEET_ID;
     const targetRange = range || DEFAULT_RANGE;
+    const targetWebhookUrl = webhookUrl || process.env.GOOGLE_APPS_SCRIPT_WEBHOOK_URL;
     
     if (!targetSheetId) {
         return res.status(400).json({ 
@@ -1108,16 +1111,16 @@ app.post('/api/attendees/:id/checkin', async (req, res) => {
             attendanceData.delete(attendeeId);
         }
         
-        // Notify Apps Script webhook after check-in (only when marking as checked-in)
+        // Notify Apps Script webhook after check-in (only when marking as checked-in and webhook URL is provided)
         let webhookStatus = null;
-        if (checkedIn) {
+        if (checkedIn && targetWebhookUrl) {
             const derivedSheetName = sheetUpdate.sheetName || ((targetRange && targetRange.includes('!')) ? targetRange.split('!')[0] : (targetRange || 'Sheet1'));
             const derivedRowIndex = sheetUpdate.sheetRowNumber || (attendeeId + 1);
             const payload = {
                 sheetName: derivedSheetName,
                 rowIndex: derivedRowIndex
             };
-            const webhookResponse = await notifyAppsScriptWebhook(payload);
+            const webhookResponse = await notifyAppsScriptWebhook(payload, targetWebhookUrl);
             webhookStatus = webhookResponse;
             if (!webhookResponse.success && !webhookResponse.skipped) {
                 console.warn('Apps Script webhook notification failed:', webhookResponse.error);
