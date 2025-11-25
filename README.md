@@ -94,6 +94,9 @@ PORT=3000
   - When disabled, only the check-in status (true/false) will be written to the sheet
   - The "Check-In Time" column will not be created or updated
   - Useful if you only need to track attendance status without timestamps
+- `GOOGLE_APPS_SCRIPT_WEBHOOK_URL` (optional): URL of a deployed Google Apps Script Web App to notify after each successful check-in
+  - Server sends `POST { "sheetName": "...", "rowIndex": <sheetRow> }` after marking an attendee as checked-in
+  - Leave empty to disable webhook notifications
 
 ##### Option B: Frontend Configuration (Recommended for Multiple Teams/Sheets)
 

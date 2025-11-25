@@ -45,10 +45,10 @@ class AttendeeCheckInApp {
             this.loadAttendanceSummary();
             this.loadDefaultResults();
             
-            // Poll attendance summary every 5 seconds to keep count updated
+            // Poll attendance summary every 13 seconds to keep count updated
             this.attendanceSummaryInterval = setInterval(() => {
                 this.loadAttendanceSummary();
-            }, 5000);
+            }, 13000);
             
             // Auto-refresh attendee list every 30 seconds to pick up external changes
             this.autoRefreshInterval = setInterval(() => {
@@ -140,7 +140,7 @@ class AttendeeCheckInApp {
                 if (!this.attendanceSummaryInterval) {
                     this.attendanceSummaryInterval = setInterval(() => {
                         this.loadAttendanceSummary();
-                    }, 5000);
+                    }, 13000);
                 }
                 
                 if (!this.autoRefreshInterval) {

@@ -13,12 +13,17 @@ app.use(bodyParser.json());
 app.use(express.static('public'));
 
 // Google Sheets configuration
-const SCOPES = ['https://www.googleapis.com/auth/spreadsheets']; // Updated to include write access
+const SCOPES = [
+    'https://www.googleapis.com/auth/spreadsheets', // Sheets API access
+    'https://www.googleapis.com/auth/script.projects' // Apps Script API access (optional, for calling Apps Script functions)
+];
 // Legacy: Support environment variables for backward compatibility
 const DEFAULT_SHEET_ID = process.env.GOOGLE_SHEET_ID;
 const DEFAULT_RANGE = process.env.GOOGLE_SHEET_RANGE || 'Sheet1!A:Z';
 // Check-in time logging configuration
 const DISABLE_CHECKIN_TIME_LOGGING = process.env.DISABLE_CHECKIN_TIME_LOGGING === 'true' || process.env.DISABLE_CHECKIN_TIME_LOGGING === '1';
+// Google Apps Script webhook configuration
+const APPS_SCRIPT_WEBHOOK_URL = process.env.GOOGLE_APPS_SCRIPT_WEBHOOK_URL;
 
 // Demo data for testing when Google Sheets is not configured
 const DEMO_ATTENDEES = [
@@ -188,7 +193,18 @@ async function validateSheetAccess(sheetId, range = DEFAULT_RANGE) {
     }
     
     try {
-        const authClient = await auth.getClient();
+        let authClient;
+        try {
+            authClient = await auth.getClient();
+        } catch (authError) {
+            return {
+                valid: false,
+                error: 'Authentication failed. Please check your Google Sheets credentials.',
+                authError: true,
+                errorCode: authError.code
+            };
+        }
+        
         await retryOperation(async () => {
             return await sheets.spreadsheets.values.get({
                 auth: authClient,
@@ -198,15 +214,31 @@ async function validateSheetAccess(sheetId, range = DEFAULT_RANGE) {
         });
         return { valid: true };
     } catch (error) {
-        if (error.code === 403 || error.code === 404) {
-            return { 
-                valid: false, 
-                error: `Cannot access sheet. Ensure the sheet is shared with the service account email and the sheet ID is correct.` 
-            };
+        let errorMessage = error.message;
+        let errorType = 'unknown';
+        
+        if (error.code === 401) {
+            errorMessage = 'Authentication failed. Please check your Google Sheets credentials.';
+            errorType = 'authentication';
+        } else if (error.code === 403) {
+            errorMessage = 'Permission denied. Ensure the sheet is shared with the service account email and the service account has Editor access.';
+            errorType = 'permission';
+        } else if (error.code === 404) {
+            errorMessage = 'Sheet not found. Please verify the Sheet ID is correct.';
+            errorType = 'not_found';
+        } else if (error.code === 429) {
+            errorMessage = 'Rate limit exceeded. Please try again in a moment.';
+            errorType = 'rate_limit';
+        } else if (error.code === 503) {
+            errorMessage = 'Google Sheets service temporarily unavailable. Please try again.';
+            errorType = 'service_unavailable';
         }
+        
         return { 
             valid: false, 
-            error: `Error accessing sheet: ${error.message}` 
+            error: errorMessage,
+            errorType: errorType,
+            errorCode: error.code
         };
     }
 }
@@ -258,18 +290,119 @@ if (DEFAULT_SHEET_ID && credentials && !credentialsError) {
 // Note: This is now primarily used as a cache. Check-in status is read from Google Sheets.
 let attendanceData = new Map();
 
-// Retry helper function for Google Sheets API calls
-async function retryOperation(operation, maxRetries = 3, delay = 1000) {
+// Retry helper function for Google Sheets API calls with improved error handling
+async function retryOperation(operation, maxRetries = 3, baseDelay = 1000) {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
             return await operation();
         } catch (error) {
-            if (attempt === maxRetries) {
+            // Don't retry on authentication/authorization errors (401, 403)
+            if (error.code === 401 || error.code === 403) {
+                console.error(`Authentication/Authorization error (${error.code}):`, error.message);
                 throw error;
             }
-            console.log(`Retry attempt ${attempt}/${maxRetries} after error:`, error.message);
-            await new Promise(resolve => setTimeout(resolve, delay * attempt));
+            
+            // Don't retry on client errors (400, 404) - these won't be fixed by retrying
+            if (error.code === 400 || error.code === 404) {
+                console.error(`Client error (${error.code}):`, error.message);
+                throw error;
+            }
+            
+            // If this is the last attempt, throw the error
+            if (attempt === maxRetries) {
+                console.error(`Max retries (${maxRetries}) reached. Final error:`, error.message);
+                throw error;
+            }
+            
+            // Calculate delay with exponential backoff and jitter
+            let delay;
+            if (error.code === 429 || error.code === 503) {
+                // Rate limit or service unavailable - use longer exponential backoff
+                const exponentialDelay = baseDelay * Math.pow(2, attempt - 1);
+                const jitter = Math.random() * 0.3 * exponentialDelay; // Add up to 30% jitter
+                delay = exponentialDelay + jitter;
+                console.log(`Rate limit/service unavailable (${error.code}). Retry attempt ${attempt}/${maxRetries} after ${Math.round(delay)}ms`);
+            } else {
+                // Other errors - use linear backoff
+                delay = baseDelay * attempt;
+                console.log(`Retry attempt ${attempt}/${maxRetries} after ${delay}ms. Error:`, error.message);
+            }
+            
+            await new Promise(resolve => setTimeout(resolve, delay));
         }
+    }
+}
+
+// Helper function to call Google Apps Script functions
+// Requires: Apps Script API enabled in Google Cloud Console
+// Usage: await callAppsScriptFunction('SCRIPT_ID', 'functionName', [param1, param2])
+async function callAppsScriptFunction(scriptId, functionName, parameters = []) {
+    if (!auth || !scriptId || !functionName) {
+        throw new Error('Apps Script call requires auth, scriptId, and functionName');
+    }
+    
+    try {
+        const authClient = await auth.getClient();
+        const script = google.script({ version: 'v1', auth: authClient });
+        
+        const request = {
+            scriptId: scriptId,
+            resource: {
+                function: functionName,
+                parameters: parameters
+            }
+        };
+        
+        const response = await retryOperation(async () => {
+            return await script.scripts.run(request);
+        });
+        
+        if (response.data.error) {
+            throw new Error(`Apps Script error: ${JSON.stringify(response.data.error)}`);
+        }
+        
+        return {
+            success: true,
+            result: response.data.response?.result,
+            error: response.data.error
+        };
+    } catch (error) {
+        console.error('Error calling Apps Script function:', error);
+        throw error;
+    }
+}
+
+// Helper to invoke Google Apps Script web app endpoints (HTTP POST)
+async function notifyAppsScriptWebhook(payload) {
+    if (!APPS_SCRIPT_WEBHOOK_URL) {
+        return { success: false, skipped: true, reason: 'Webhook URL not configured' };
+    }
+
+    try {
+        const response = await fetch(APPS_SCRIPT_WEBHOOK_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+        });
+
+        const rawBody = await response.text();
+        let parsedBody = null;
+        try {
+            parsedBody = rawBody ? JSON.parse(rawBody) : null;
+        } catch (parseError) {
+            parsedBody = rawBody;
+        }
+
+        if (!response.ok) {
+            throw new Error(`Webhook request failed with status ${response.status}: ${rawBody}`);
+        }
+
+        return { success: true, response: parsedBody };
+    } catch (error) {
+        console.error('Apps Script webhook error:', error.message);
+        return { success: false, error: error.message };
     }
 }
 
@@ -452,7 +585,23 @@ async function updateSheetCheckInStatus(rowIndex, checkedIn, checkInTime, sheetI
     }
 
     try {
-        const authClient = await auth.getClient();
+        const sheetName = (range && range.includes('!'))
+            ? range.split('!')[0]
+            : (range || 'Sheet1');
+        const sheetRowNumber = rowIndex + 1; // +1 to account for header row
+
+        // Get auth client with error handling
+        let authClient;
+        try {
+            authClient = await auth.getClient();
+        } catch (authError) {
+            console.error('Failed to get authentication client:', authError.message);
+            return { 
+                success: false, 
+                error: 'Authentication failed. Please check your Google Sheets credentials.',
+                authError: true
+            };
+        }
         
         // Ensure check-in columns exist (idempotent)
         const { checkInStatusCol, checkInTimeCol } = await ensureCheckInColumns(authClient, sheetId, range);
@@ -480,7 +629,6 @@ async function updateSheetCheckInStatus(rowIndex, checkedIn, checkInTime, sheetI
         }
 
         // Update the specific row with check-in status and time
-        const sheetName = range.split('!')[0];
         const statusRange = `${sheetName}!${columnIndexToLetter(checkInStatusCol)}${rowIndex + 1}`;
         const timeRange = checkInTimeCol !== -1 
             ? `${sheetName}!${columnIndexToLetter(checkInTimeCol)}${rowIndex + 1}`
@@ -515,11 +663,41 @@ async function updateSheetCheckInStatus(rowIndex, checkedIn, checkInTime, sheetI
         }
 
         console.log(`✅ Updated sheet for row ${rowIndex + 1}: ${checkedIn ? 'Checked In' : 'Not Checked In'}`);
-        return { success: true };
+        return { success: true, sheetName, sheetRowNumber };
         
     } catch (error) {
         console.error('Error updating Google Sheet:', error);
-        return { success: false, error: error.message };
+        
+        // Provide user-friendly error messages based on error type
+        let userMessage = error.message;
+        let errorType = 'unknown';
+        
+        if (error.code === 401) {
+            userMessage = 'Authentication failed. Please check your Google Sheets credentials.';
+            errorType = 'authentication';
+        } else if (error.code === 403) {
+            userMessage = 'Permission denied. Ensure the service account has Editor access to the sheet.';
+            errorType = 'permission';
+        } else if (error.code === 429) {
+            userMessage = 'Rate limit exceeded. Please try again in a moment.';
+            errorType = 'rate_limit';
+        } else if (error.code === 503) {
+            userMessage = 'Google Sheets service temporarily unavailable. Please try again.';
+            errorType = 'service_unavailable';
+        } else if (error.code === 404) {
+            userMessage = 'Sheet not found. Please verify the Sheet ID is correct.';
+            errorType = 'not_found';
+        } else if (error.message && error.message.includes('network') || error.message.includes('timeout')) {
+            userMessage = 'Network error. Please check your connection and try again.';
+            errorType = 'network';
+        }
+        
+        return { 
+            success: false, 
+            error: userMessage,
+            errorType: errorType,
+            errorCode: error.code
+        };
     }
 }
 
@@ -550,7 +728,13 @@ async function getAttendees(sheetId, range) {
     }
     
     // Try to fetch from Google Sheets
-    const authClient = await auth.getClient();
+    let authClient;
+    try {
+        authClient = await auth.getClient();
+    } catch (authError) {
+        console.error('Failed to get authentication client in getAttendees:', authError.message);
+        throw new Error('Authentication failed. Please check your Google Sheets credentials.');
+    }
     
     const response = await retryOperation(async () => {
         return await sheets.spreadsheets.values.get({
@@ -660,10 +844,30 @@ app.get('/api/health', async (req, res) => {
             defaultSheetId: DEFAULT_SHEET_ID || 'none'
         };
         
+        // Test authentication
+        try {
+            const testAuthClient = await auth.getClient();
+            health.authentication = {
+                status: 'ok',
+                message: 'Authentication client initialized successfully'
+            };
+        } catch (authTestError) {
+            health.authentication = {
+                status: 'error',
+                message: 'Failed to initialize authentication client',
+                error: authTestError.message,
+                errorCode: authTestError.code
+            };
+            health.status = 'degraded';
+        }
+        
         // If sheetId provided, validate access
         if (sheetId) {
             const validation = await validateSheetAccess(sheetId);
             health.sheetValidation = validation;
+            if (!validation.valid) {
+                health.status = 'degraded';
+            }
         }
     } else {
         health.message = 'Running in demo mode';
@@ -752,7 +956,22 @@ app.get('/api/attendees', async (req, res) => {
         res.json(attendees);
     } catch (error) {
         console.error('Error fetching attendees:', error);
-        res.status(500).json({ error: 'Failed to fetch attendees: ' + error.message });
+        
+        let statusCode = 500;
+        let errorMessage = 'Failed to fetch attendees: ' + error.message;
+        
+        if (error.message.includes('Authentication failed')) {
+            statusCode = 401;
+            errorMessage = 'Authentication failed. Please check your Google Sheets credentials.';
+        } else if (error.message.includes('not configured')) {
+            statusCode = 503;
+            errorMessage = 'Google Sheets integration not configured.';
+        }
+        
+        res.status(statusCode).json({ 
+            error: errorMessage,
+            errorCode: error.code
+        });
     }
 });
 
@@ -787,7 +1006,24 @@ app.get('/api/attendees/search', async (req, res) => {
         res.json(results);
     } catch (error) {
         console.error('Error searching attendees:', error);
-        res.status(500).json({ error: 'Failed to search attendees' });
+        
+        let statusCode = 500;
+        let errorMessage = 'Failed to search attendees';
+        
+        if (error.message && error.message.includes('Authentication failed')) {
+            statusCode = 401;
+            errorMessage = 'Authentication failed. Please check your Google Sheets credentials.';
+        } else if (error.message && error.message.includes('not configured')) {
+            statusCode = 503;
+            errorMessage = 'Google Sheets integration not configured.';
+        } else if (error.message) {
+            errorMessage = 'Failed to search attendees: ' + error.message;
+        }
+        
+        res.status(statusCode).json({ 
+            error: errorMessage,
+            errorCode: error.code
+        });
     }
 });
 
@@ -829,20 +1065,39 @@ app.post('/api/attendees/:id/checkin', async (req, res) => {
         const sheetUpdate = await updateSheetCheckInStatus(attendeeId, checkedIn, checkInTime, targetSheetId, targetRange);
         
         if (!sheetUpdate.success) {
-            // If sheet update fails, still update local cache but warn user
-            console.warn(`Sheet update failed for attendee ${attendeeId}, but updating local cache`);
-            if (checkedIn) {
-                attendanceData.set(attendeeId, checkInTime);
-            } else {
-                attendanceData.delete(attendeeId);
+            // Determine appropriate status code based on error type
+            let statusCode = 500;
+            if (sheetUpdate.errorType === 'authentication') {
+                statusCode = 401;
+            } else if (sheetUpdate.errorType === 'permission') {
+                statusCode = 403;
+            } else if (sheetUpdate.errorType === 'rate_limit' || sheetUpdate.errorType === 'service_unavailable') {
+                statusCode = 503;
+            } else if (sheetUpdate.errorType === 'not_found') {
+                statusCode = 404;
             }
             
-            return res.status(500).json({ 
+            // For non-critical errors, still update local cache but warn user
+            // For auth/permission errors, don't cache (they need to be fixed)
+            if (sheetUpdate.errorType !== 'authentication' && sheetUpdate.errorType !== 'permission') {
+                console.warn(`Sheet update failed for attendee ${attendeeId}, but updating local cache`);
+                if (checkedIn) {
+                    attendanceData.set(attendeeId, checkInTime);
+                } else {
+                    attendanceData.delete(attendeeId);
+                }
+            }
+            
+            return res.status(statusCode).json({ 
                 success: false, 
-                error: 'Failed to update Google Sheet: ' + sheetUpdate.error,
+                error: sheetUpdate.error || 'Failed to update Google Sheet',
+                errorType: sheetUpdate.errorType,
+                errorCode: sheetUpdate.errorCode,
                 checkedIn: checkedIn,
                 checkInTime: checkInTime,
-                warning: 'Check-in saved locally but may not be synced to sheet'
+                warning: (sheetUpdate.errorType !== 'authentication' && sheetUpdate.errorType !== 'permission') 
+                    ? 'Check-in saved locally but may not be synced to sheet' 
+                    : undefined
             });
         }
         
@@ -851,6 +1106,22 @@ app.post('/api/attendees/:id/checkin', async (req, res) => {
             attendanceData.set(attendeeId, checkInTime);
         } else {
             attendanceData.delete(attendeeId);
+        }
+        
+        // Notify Apps Script webhook after check-in (only when marking as checked-in)
+        let webhookStatus = null;
+        if (checkedIn) {
+            const derivedSheetName = sheetUpdate.sheetName || ((targetRange && targetRange.includes('!')) ? targetRange.split('!')[0] : (targetRange || 'Sheet1'));
+            const derivedRowIndex = sheetUpdate.sheetRowNumber || (attendeeId + 1);
+            const payload = {
+                sheetName: derivedSheetName,
+                rowIndex: derivedRowIndex
+            };
+            const webhookResponse = await notifyAppsScriptWebhook(payload);
+            webhookStatus = webhookResponse;
+            if (!webhookResponse.success && !webhookResponse.skipped) {
+                console.warn('Apps Script webhook notification failed:', webhookResponse.error);
+            }
         }
         
         // Calculate updated count from Google Sheets (source of truth)
@@ -868,13 +1139,30 @@ app.post('/api/attendees/:id/checkin', async (req, res) => {
             success: true, 
             checkedIn: checkedIn,
             checkInTime: checkInTime,
-            totalCheckedIn: totalCheckedIn
+            totalCheckedIn: totalCheckedIn,
+            webhookStatus: webhookStatus && !webhookStatus.skipped ? webhookStatus : undefined
         });
     } catch (error) {
         console.error('Error in check-in endpoint:', error);
-        res.status(500).json({ 
+        
+        let statusCode = 500;
+        let errorMessage = 'Internal server error: ' + error.message;
+        
+        if (error.message && error.message.includes('Authentication failed')) {
+            statusCode = 401;
+            errorMessage = 'Authentication failed. Please check your Google Sheets credentials.';
+        } else if (error.code === 429) {
+            statusCode = 503;
+            errorMessage = 'Rate limit exceeded. Please try again in a moment.';
+        } else if (error.code === 503) {
+            statusCode = 503;
+            errorMessage = 'Google Sheets service temporarily unavailable. Please try again.';
+        }
+        
+        res.status(statusCode).json({ 
             success: false, 
-            error: 'Internal server error: ' + error.message 
+            error: errorMessage,
+            errorCode: error.code
         });
     }
 });
@@ -953,7 +1241,17 @@ app.post('/api/attendance/sync-from-sheet', async (req, res) => {
             });
         }
 
-        const authClient = await auth.getClient();
+        let authClient;
+        try {
+            authClient = await auth.getClient();
+        } catch (authError) {
+            return res.status(401).json({
+                error: 'Authentication failed',
+                message: 'Cannot sync: Failed to authenticate with Google Sheets',
+                fix: 'Please check your GOOGLE_APPLICATION_CREDENTIALS. Check /api/health for details.'
+            });
+        }
+        
         const response = await retryOperation(async () => {
             return await sheets.spreadsheets.values.get({
                 auth: authClient,
@@ -1021,7 +1319,33 @@ app.post('/api/attendance/sync-from-sheet', async (req, res) => {
         
     } catch (error) {
         console.error('Error syncing from sheet:', error);
-        res.status(500).json({ error: 'Failed to sync from sheet' });
+        
+        let statusCode = 500;
+        let errorMessage = 'Failed to sync from sheet';
+        
+        if (error.code === 401) {
+            statusCode = 401;
+            errorMessage = 'Authentication failed. Please check your Google Sheets credentials.';
+        } else if (error.code === 403) {
+            statusCode = 403;
+            errorMessage = 'Permission denied. Ensure the service account has Editor access to the sheet.';
+        } else if (error.code === 404) {
+            statusCode = 404;
+            errorMessage = 'Sheet not found. Please verify the Sheet ID is correct.';
+        } else if (error.code === 429) {
+            statusCode = 503;
+            errorMessage = 'Rate limit exceeded. Please try again in a moment.';
+        } else if (error.code === 503) {
+            statusCode = 503;
+            errorMessage = 'Google Sheets service temporarily unavailable. Please try again.';
+        } else if (error.message) {
+            errorMessage = 'Failed to sync from sheet: ' + error.message;
+        }
+        
+        res.status(statusCode).json({ 
+            error: errorMessage,
+            errorCode: error.code
+        });
     }
 });
 
