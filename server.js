@@ -380,8 +380,22 @@ async function notifyAppsScriptWebhook(payload, webhookUrl = null) {
         return { success: false, skipped: true, reason: 'Webhook URL not configured' };
     }
 
+    // Clean and validate the URL
+    const cleanUrl = String(targetWebhookUrl).trim();
+    if (!cleanUrl) {
+        return { success: false, error: 'Webhook URL is empty' };
+    }
+
+    // Validate URL format
+    let validatedUrl;
     try {
-        const response = await fetch(targetWebhookUrl, {
+        validatedUrl = new URL(cleanUrl);
+    } catch (urlError) {
+        return { success: false, error: `Invalid webhook URL format: ${urlError.message}` };
+    }
+
+    try {
+        const response = await fetch(validatedUrl.toString(), {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
