@@ -976,12 +976,18 @@ app.get('/api/attendees', async (req, res) => {
         let statusCode = 500;
         let errorMessage = 'Failed to fetch attendees: ' + error.message;
         
-        if (error.message.includes('Authentication failed')) {
+        if (error.code === 404) {
+            statusCode = 404;
+            errorMessage = 'Sheet not found. Please verify the Sheet ID is correct and the sheet is shared with the service account.';
+        } else if (error.message.includes('Authentication failed')) {
             statusCode = 401;
             errorMessage = 'Authentication failed. Please check your Google Sheets credentials.';
         } else if (error.message.includes('not configured')) {
             statusCode = 503;
             errorMessage = 'Google Sheets integration not configured.';
+        } else if (error.code === 403) {
+            statusCode = 403;
+            errorMessage = 'Permission denied. Ensure the sheet is shared with the service account email and has Editor access.';
         }
         
         res.status(statusCode).json({ 
@@ -1192,16 +1198,26 @@ app.get('/api/attendance/summary', async (req, res) => {
         
         // Read from Google Sheets (source of truth) if available
         if (auth && targetSheetId) {
-            const attendees = await getAttendees(targetSheetId, range);
-            const checkedInAttendees = attendees.filter(a => a.checkedIn);
-            
-            return res.json({
-                totalCheckedIn: checkedInAttendees.length,
-                checkIns: checkedInAttendees.map(a => ({
-                    id: a.id,
-                    checkInTime: a.checkInTime
-                }))
-            });
+            try {
+                const attendees = await getAttendees(targetSheetId, range);
+                const checkedInAttendees = attendees.filter(a => a.checkedIn);
+                
+                return res.json({
+                    totalCheckedIn: checkedInAttendees.length,
+                    checkIns: checkedInAttendees.map(a => ({
+                        id: a.id,
+                        checkInTime: a.checkInTime
+                    }))
+                });
+            } catch (sheetsError) {
+                // If it's a 404, log but fall back to cache
+                if (sheetsError.code === 404) {
+                    console.error('Error getting attendance summary (sheet not found):', sheetsError.message);
+                } else {
+                    console.error('Error getting attendance summary:', sheetsError);
+                }
+                // Fall through to cache fallback
+            }
         }
         
         // Fallback to in-memory cache
@@ -1366,7 +1382,44 @@ app.post('/api/attendance/sync-from-sheet', async (req, res) => {
     }
 });
 
-app.listen(PORT, () => {
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    // Don't exit the process, just log the error
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+    console.error('Uncaught Exception:', error);
+    // Log but don't exit - let the server continue running
+});
+
+// Graceful shutdown handling
+let server;
+const gracefulShutdown = (signal) => {
+    console.log(`\n${signal} received. Starting graceful shutdown...`);
+    
+    if (server) {
+        server.close(() => {
+            console.log('HTTP server closed.');
+            process.exit(0);
+        });
+        
+        // Force shutdown after 10 seconds
+        setTimeout(() => {
+            console.error('Forced shutdown after timeout');
+            process.exit(1);
+        }, 10000);
+    } else {
+        process.exit(0);
+    }
+};
+
+// Listen for termination signals
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+server = app.listen(PORT, () => {
     console.log('\n' + '='.repeat(60));
     console.log(`🚀 Server running on port ${PORT}`);
     console.log('='.repeat(60));

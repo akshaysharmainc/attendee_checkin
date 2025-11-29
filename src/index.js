@@ -49,12 +49,12 @@ class AttendeeCheckInApp {
             // Poll attendance summary every 13 seconds to keep count updated
             this.attendanceSummaryInterval = setInterval(() => {
                 this.loadAttendanceSummary();
-            }, 13000);
+            }, 23000);
             
             // Auto-refresh attendee list every 30 seconds to pick up external changes
             this.autoRefreshInterval = setInterval(() => {
                 this.autoRefreshAttendeeList();
-            }, 30000); // 30 seconds
+            }, 45000); // 30 seconds
         } else {
             // Show configuration modal if no sheet ID found
             this.showSheetConfigModal();
@@ -155,13 +155,13 @@ class AttendeeCheckInApp {
                 if (!this.attendanceSummaryInterval) {
                     this.attendanceSummaryInterval = setInterval(() => {
                         this.loadAttendanceSummary();
-                    }, 13000);
+                    }, 23000);
                 }
                 
                 if (!this.autoRefreshInterval) {
                     this.autoRefreshInterval = setInterval(() => {
                         this.autoRefreshAttendeeList();
-                    }, 30000);
+                    }, 45000);
                 }
                 
                 return true;
