@@ -2,6 +2,11 @@ import './styles.css';
 
 // Constants
 const DEFAULT_SHEET_RANGE = 'Sheet1!A:Z';
+const SEARCH_DEBOUNCE_MS = 300;
+const ATTENDANCE_SUMMARY_INTERVAL_MS = 23000;
+const AUTO_REFRESH_INTERVAL_MS = 45000;
+const SUCCESS_ANIMATION_DURATION_MS = 2000;
+const NOTIFICATION_DURATION_MS = 3000;
 
 class AttendeeCheckInApp {
     constructor() {
@@ -47,16 +52,7 @@ class AttendeeCheckInApp {
         if (this.sheetId) {
             this.loadAttendanceSummary();
             this.loadDefaultResults();
-            
-            // Poll attendance summary every 13 seconds to keep count updated
-            this.attendanceSummaryInterval = setInterval(() => {
-                this.loadAttendanceSummary();
-            }, 23000);
-            
-            // Auto-refresh attendee list every 30 seconds to pick up external changes
-            this.autoRefreshInterval = setInterval(() => {
-                this.autoRefreshAttendeeList();
-            }, 45000); // 30 seconds
+            this.startPolling();
         } else {
             // Show configuration modal if no sheet ID found
             this.showSheetConfigModal();
@@ -174,17 +170,7 @@ class AttendeeCheckInApp {
                 this.loadDefaultResults();
                 
                 // Start polling
-                if (!this.attendanceSummaryInterval) {
-                    this.attendanceSummaryInterval = setInterval(() => {
-                        this.loadAttendanceSummary();
-                    }, 23000);
-                }
-                
-                if (!this.autoRefreshInterval) {
-                    this.autoRefreshInterval = setInterval(() => {
-                        this.autoRefreshAttendeeList();
-                    }, 45000);
-                }
+                this.startPolling();
                 
                 return true;
             } else {
@@ -202,6 +188,22 @@ class AttendeeCheckInApp {
         if (this.configError) {
             this.configError.textContent = message;
             this.configError.style.display = 'block';
+        }
+    }
+
+    startPolling() {
+        // Poll attendance summary to keep count updated
+        if (!this.attendanceSummaryInterval) {
+            this.attendanceSummaryInterval = setInterval(() => {
+                this.loadAttendanceSummary();
+            }, ATTENDANCE_SUMMARY_INTERVAL_MS);
+        }
+        
+        // Auto-refresh attendee list to pick up external changes
+        if (!this.autoRefreshInterval) {
+            this.autoRefreshInterval = setInterval(() => {
+                this.autoRefreshAttendeeList();
+            }, AUTO_REFRESH_INTERVAL_MS);
         }
     }
 
@@ -304,7 +306,7 @@ class AttendeeCheckInApp {
                 // Clear results on error to avoid showing stale/misleading data
                 this.showEmptyState();
             }
-        }, 300);
+        }, SEARCH_DEBOUNCE_MS);
     }
 
     async searchAttendees(query) {
@@ -666,6 +668,12 @@ class AttendeeCheckInApp {
         });
     }
 
+    rollbackCheckIn(checkbox, checkedIn, row, currentCount) {
+        checkbox.checked = !checkedIn;
+        row.classList.toggle('checked-in', !checkedIn);
+        this.checkedInCount.textContent = currentCount;
+    }
+
     async handleCheckIn(checkbox) {
         if (!this.sheetId) {
             this.showError('Sheet not configured');
@@ -714,9 +722,7 @@ class AttendeeCheckInApp {
                 }));
                 
                 // ROLLBACK: Revert optimistic updates on error
-                checkbox.checked = !checkedIn;
-                row.classList.toggle('checked-in', !checkedIn);
-                this.checkedInCount.textContent = currentCount; // Revert count
+                this.rollbackCheckIn(checkbox, checkedIn, row, currentCount);
                 
                 const errorMsg = error.error || error.warning || 'Check-in failed';
                 this.showError(errorMsg);
@@ -730,9 +736,7 @@ class AttendeeCheckInApp {
             
             if (!result.success) {
                 // ROLLBACK: Revert optimistic updates on error
-                checkbox.checked = !checkedIn;
-                row.classList.toggle('checked-in', !checkedIn);
-                this.checkedInCount.textContent = currentCount; // Revert count
+                this.rollbackCheckIn(checkbox, checkedIn, row, currentCount);
                 
                 const errorMsg = result.error || result.warning || 'Check-in failed';
                 this.showError(errorMsg);
@@ -751,9 +755,7 @@ class AttendeeCheckInApp {
             console.error('Check-in error:', error);
             
             // ROLLBACK: Revert optimistic updates on error
-            checkbox.checked = !checkedIn;
-            row.classList.toggle('checked-in', !checkedIn);
-            this.checkedInCount.textContent = currentCount; // Revert count
+            this.rollbackCheckIn(checkbox, checkedIn, row, currentCount);
             
             const errorMsg = error.message || 'Failed to connect to Google Sheet. Please check your connection and try again.';
             this.showError('Failed to update attendance: ' + errorMsg);
@@ -831,7 +833,7 @@ class AttendeeCheckInApp {
             row.classList.add('checkin-success');
             setTimeout(() => {
                 row.classList.remove('checkin-success');
-            }, 2000);
+            }, SUCCESS_ANIMATION_DURATION_MS);
         }
     }
 
@@ -841,7 +843,7 @@ class AttendeeCheckInApp {
             row.classList.add('checkout-success');
             setTimeout(() => {
                 row.classList.remove('checkout-success');
-            }, 2000);
+            }, SUCCESS_ANIMATION_DURATION_MS);
         }
     }
 
@@ -923,10 +925,10 @@ class AttendeeCheckInApp {
         
         document.body.appendChild(errorDiv);
         
-        // Remove after 3 seconds
+        // Remove after notification duration
         setTimeout(() => {
             errorDiv.remove();
-        }, 3000);
+        }, NOTIFICATION_DURATION_MS);
     }
 
     showSuccess(message) {
@@ -940,10 +942,10 @@ class AttendeeCheckInApp {
         
         document.body.appendChild(successDiv);
         
-        // Remove after 3 seconds
+        // Remove after notification duration
         setTimeout(() => {
             successDiv.remove();
-        }, 3000);
+        }, NOTIFICATION_DURATION_MS);
     }
 }
 

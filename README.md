@@ -9,6 +9,8 @@ A modern web application for checking in attendees at corporate events with Goog
 - ✅ Simple checkbox check-in interface
 - 📱 Responsive design for all devices
 - 📈 Real-time attendance tracking
+- 📊 Total Leads count display in header
+- 🔗 Configurable webhook URL for Apps Script notifications
 
 ## Quick Start
 
@@ -95,29 +97,43 @@ PORT=3000
   - The "Check-In Time" column will not be created or updated
   - Useful if you only need to track attendance status without timestamps
 - `GOOGLE_APPS_SCRIPT_WEBHOOK_URL` (optional): URL of a deployed Google Apps Script Web App to notify after each successful check-in
-  - Server sends `POST { "sheetName": "...", "rowIndex": <sheetRow> }` after marking an attendee as checked-in
+  - Server sends `POST { "sheetName": "Sheet1", "rowIndex": 2 }` after marking an attendee as checked-in
+  - `rowIndex` is the 1-based row number in the sheet (row 1 is header, row 2 is first data row)
+  - Webhook is only called when checking in (not when checking out)
   - Leave empty to disable webhook notifications
+  - **Note**: Webhook URL can also be configured via frontend modal or URL parameter (takes priority over environment variable)
 
 ##### Option B: Frontend Configuration (Recommended for Multiple Teams/Sheets)
 
 1. **Don't set** `GOOGLE_SHEET_ID` in `.env` (or leave it empty)
 2. When you open the app, a configuration modal will appear
-3. Enter your Sheet ID and Range
+3. Enter your Sheet ID, Range, and optional Webhook URL
 4. The configuration is saved in your browser's localStorage
 5. You can change it anytime using the gear icon (⚙️) in the header
+
+**Configuration Fields:**
+- **Sheet ID** (required): Your Google Sheet ID
+- **Sheet Range** (optional): Range to read (default: `Sheet1!A:Z`)
+- **Webhook URL** (optional): Google Apps Script Web App URL for check-in notifications
 
 **Benefits:**
 - Different users can use different sheets
 - No need to redeploy when switching sheets
 - Configuration persists in browser
+- Webhook URL can be configured per user/session
 
 ##### Option C: URL Parameters
 
-You can also provide the sheet ID and range via URL:
+You can also provide the sheet ID, range, and webhook URL via URL:
 
 ```
-http://localhost:3000?sheetId=YOUR_SHEET_ID&range=Sheet1!A:Z
+http://localhost:3000?sheetId=YOUR_SHEET_ID&range=Sheet1!A:Z&webhookUrl=YOUR_WEBHOOK_URL
 ```
+
+**URL Parameters:**
+- `sheetId` (required): Your Google Sheet ID
+- `range` (optional): Sheet range (default: `Sheet1!A:Z`)
+- `webhookUrl` (optional): Google Apps Script Web App URL
 
 **Priority Order:**
 1. URL parameters (highest priority)
@@ -170,8 +186,9 @@ To deploy this app for your team, see **[DEPLOYMENT.md](./DEPLOYMENT.md)** for d
 ### Basic Operations
 
 1. **Search**: Type a few letters to find attendees by name or company
-   - Results appear as you type (debounced search)
+   - Results appear as you type (debounced search with 300ms delay)
    - Shows all attendees by default when search is empty
+   - Search results are limited to top 20 matches
    
 2. **Check-in**: Click the checkbox to mark attendance
    - Card color updates instantly (optimistic UI)
@@ -183,8 +200,9 @@ To deploy this app for your team, see **[DEPLOYMENT.md](./DEPLOYMENT.md)** for d
    - Refreshes the displayed attendee list
 
 4. **Configure Sheet**: Click the gear icon (⚙️) in the header to change sheet configuration
-   - Enter new Sheet ID and Range
+   - Enter new Sheet ID, Range, and optional Webhook URL
    - Configuration is saved in browser localStorage
+   - Webhook URL is used to notify Google Apps Script after each successful check-in
 
 ### Attendee Display
 
@@ -243,6 +261,7 @@ The main section displays the most important information in a structured layout:
 - Examples: Email, Phone, Title, Department, Dietary Restrictions, Notes, etc.
 - Fields are displayed as "Label: Value" pairs
 - Empty fields are automatically hidden
+- Toggle preference is saved in browser localStorage (defaults to enabled/checked)
 
 #### Column Detection Rules
 
@@ -272,8 +291,11 @@ The app automatically:
 
 ### Real-time Updates
 
-- **Count**: Updates every 5 seconds to reflect changes from other users
-- **Attendee List**: Auto-refreshes every 30 seconds to show external changes
+- **Counts**: Header displays "Total Leads" and "Checked In" counts
+  - Total Leads: Total number of rows/attendees in the sheet
+  - Checked In: Number of attendees who have checked in
+  - Both counts update every 23 seconds to reflect changes from other users
+- **Attendee List**: Auto-refreshes every 45 seconds to show external changes
 - **Check-in**: Updates instantly with optimistic UI, then syncs with server
 
 ## API Endpoints
@@ -286,15 +308,21 @@ The app automatically:
 - `GET /api/attendees/search?query=...&sheetId=...&range=...` - Search attendees
   - Required: `query` (search term)
   - Optional: `sheetId`, `range`
+  - Returns up to 20 matching results
+  - Search is case-insensitive and matches name or company fields
 
 - `POST /api/attendees/:id/checkin` - Check in/out attendee
-  - Body: `{ checkedIn: boolean, sheetId?: string, range?: string }`
-  - Returns: `{ success: boolean, checkedIn: boolean, checkInTime: string, totalCheckedIn: number }`
+  - Body: `{ checkedIn: boolean, sheetId?: string, range?: string, webhookUrl?: string }`
+  - Returns: `{ success: boolean, checkedIn: boolean, checkInTime: string, totalCheckedIn: number, webhookStatus?: object }`
+  - If `webhookUrl` is provided and attendee is checked in (not checked out), sends POST notification to webhook
+  - Webhook payload: `{ "sheetName": "Sheet1", "rowIndex": 2 }` where `rowIndex` is the 1-based row number in the sheet
 
 ### Attendance Endpoints
 
 - `GET /api/attendance/summary?sheetId=...&range=...` - Get attendance summary
-  - Returns: `{ totalCheckedIn: number, checkIns: Array }`
+  - Returns: `{ totalCheckedIn: number, totalLeads: number, checkIns: Array }`
+  - `totalLeads`: Total number of attendees/rows in the sheet
+  - `totalCheckedIn`: Number of attendees who have checked in
   - Optional query params: `sheetId`, `range`
 
 - `POST /api/attendance/sync-from-sheet` - Sync from Google Sheet
@@ -331,8 +359,8 @@ The app automatically:
 - ✅ Check browser console for error messages
 
 **Card status not updating when sheet changes**:
-- ✅ Card status auto-refreshes every 30 seconds
-- ✅ Count updates every 5 seconds
+- ✅ Card status auto-refreshes every 45 seconds
+- ✅ Count updates every 23 seconds
 - ✅ Use "Sync Sheet" button for immediate refresh
 - ✅ Check that check-in status in sheet is boolean `true`/`false` or recognized text values
 
