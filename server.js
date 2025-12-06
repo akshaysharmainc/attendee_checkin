@@ -1204,6 +1204,7 @@ app.get('/api/attendance/summary', async (req, res) => {
                 
                 return res.json({
                     totalCheckedIn: checkedInAttendees.length,
+                    totalLeads: attendees.length,
                     checkIns: checkedInAttendees.map(a => ({
                         id: a.id,
                         checkInTime: a.checkInTime
@@ -1229,6 +1230,7 @@ app.get('/api/attendance/summary', async (req, res) => {
         
         res.json({
             totalCheckedIn,
+            totalLeads: undefined, // Cannot determine total from cache alone
             checkIns
         });
     } catch (error) {
@@ -1242,6 +1244,7 @@ app.get('/api/attendance/summary', async (req, res) => {
         
         res.json({
             totalCheckedIn,
+            totalLeads: undefined, // Cannot determine total from cache alone
             checkIns
         });
     }

@@ -9,6 +9,7 @@ class AttendeeCheckInApp {
         this.searchResults = document.getElementById('searchResults');
         this.clearSearchBtn = document.getElementById('clearSearchBtn');
         this.checkedInCount = document.getElementById('checkedInCount');
+        this.totalLeadsCount = document.getElementById('totalLeadsCount');
         this.syncButton = document.getElementById('syncButton');
         this.showDetailsToggle = document.getElementById('showDetailsToggle');
         
@@ -17,6 +18,7 @@ class AttendeeCheckInApp {
         this.sheetConfigForm = document.getElementById('sheetConfigForm');
         this.sheetIdInput = document.getElementById('sheetIdInput');
         this.rangeInput = document.getElementById('rangeInput');
+        this.webhookUrlInput = document.getElementById('webhookUrlInput');
         this.cancelConfigBtn = document.getElementById('cancelConfigBtn');
         this.configGearBtn = document.getElementById('configGearBtn');
         this.configError = document.getElementById('configError');
@@ -113,6 +115,9 @@ class AttendeeCheckInApp {
             if (this.rangeInput && this.sheetRange) {
                 this.rangeInput.value = this.sheetRange;
             }
+            if (this.webhookUrlInput && this.webhookUrl) {
+                this.webhookUrlInput.value = this.webhookUrl;
+            }
         }
     }
     
@@ -123,7 +128,7 @@ class AttendeeCheckInApp {
         }
     }
     
-    async validateAndSetSheet(sheetId, range) {
+    async validateAndSetSheet(sheetId, range, webhookUrl) {
         try {
             // Validate sheet access
             const response = await fetch(`/api/sheets/validate?sheetId=${encodeURIComponent(sheetId)}&range=${encodeURIComponent(range || DEFAULT_SHEET_RANGE)}`);
@@ -132,6 +137,16 @@ class AttendeeCheckInApp {
             if (data.valid) {
                 this.sheetId = sheetId;
                 this.sheetRange = range || DEFAULT_SHEET_RANGE;
+                
+                // Save webhook URL if provided
+                if (webhookUrl && webhookUrl.trim()) {
+                    this.webhookUrl = webhookUrl.trim();
+                    localStorage.setItem('appsScriptWebhookUrl', this.webhookUrl);
+                } else {
+                    // Clear webhook URL if empty
+                    this.webhookUrl = null;
+                    localStorage.removeItem('appsScriptWebhookUrl');
+                }
                 
                 // Save to localStorage
                 localStorage.setItem('googleSheetId', this.sheetId);
@@ -142,6 +157,13 @@ class AttendeeCheckInApp {
                 url.searchParams.set('sheetId', this.sheetId);
                 if (this.sheetRange !== DEFAULT_SHEET_RANGE) {
                     url.searchParams.set('range', this.sheetRange);
+                } else {
+                    url.searchParams.delete('range');
+                }
+                if (this.webhookUrl) {
+                    url.searchParams.set('webhookUrl', this.webhookUrl);
+                } else {
+                    url.searchParams.delete('webhookUrl');
                 }
                 window.history.replaceState({}, '', url);
                 
@@ -224,13 +246,14 @@ class AttendeeCheckInApp {
                 e.preventDefault();
                 const sheetId = this.sheetIdInput.value.trim();
                 const range = this.rangeInput.value.trim() || DEFAULT_SHEET_RANGE;
+                const webhookUrl = this.webhookUrlInput.value.trim();
                 
                 if (!sheetId) {
                     this.showConfigError('Sheet ID is required');
                     return;
                 }
                 
-                await this.validateAndSetSheet(sheetId, range);
+                await this.validateAndSetSheet(sheetId, range, webhookUrl);
             });
         }
         
@@ -312,6 +335,10 @@ class AttendeeCheckInApp {
             const response = await fetch(url);
             if (response.ok) {
                 const results = await response.json();
+                // Update total leads count
+                if (this.totalLeadsCount && results) {
+                    this.totalLeadsCount.textContent = results.length;
+                }
                 // Show all results if available, otherwise show empty state
                 if (results && results.length > 0) {
                     this.displayResults(results);
@@ -827,8 +854,11 @@ class AttendeeCheckInApp {
             const response = await fetch(url);
             if (response.ok) {
                 const summary = await response.json();
-                // Update only the header count
+                // Update the header counts
                 this.checkedInCount.textContent = summary.totalCheckedIn;
+                if (summary.totalLeads !== undefined && this.totalLeadsCount) {
+                    this.totalLeadsCount.textContent = summary.totalLeads;
+                }
             } else {
                 // Don't show error for summary failures (it's less critical)
                 // Just log it silently to avoid spamming the user
